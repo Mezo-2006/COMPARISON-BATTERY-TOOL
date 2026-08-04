@@ -1,0 +1,1229 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MainWindow</class>
+ <widget class="QMainWindow" name="MainWindow">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1280</width>
+    <height>860</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>Digital Twin Validation Tool — Twin (Simulink) vs ECU (NXP MPC5744P)</string>
+  </property>
+  <property name="styleSheet">
+   <string notr="true">
+QMainWindow, QWidget {
+    background-color: #0d0d0d;
+    color: #ffffff;
+    font-family: "Segoe UI", "system-ui", sans-serif;
+    font-size: 10.5pt;
+}
+
+/* ---------- Tabs ---------- */
+QTabWidget::pane {
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px;
+    top: -1px;
+    background: #1a1a19;
+}
+QTabBar::tab {
+    background: transparent;
+    color: #c3c2b7;
+    padding: 10px 18px;
+    margin-right: 4px;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    font-weight: 600;
+}
+QTabBar::tab:hover {
+    color: #ffffff;
+    background: #242422;
+}
+QTabBar::tab:selected {
+    color: #ffffff;
+    background: #1a1a19;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-bottom: 3px solid #3987e5;
+}
+
+/* ---------- Group boxes (section cards) ---------- */
+QGroupBox {
+    background: #1a1a19;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px;
+    margin-top: 14px;
+    padding: 14px 10px 10px 10px;
+    font-weight: 600;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 12px;
+    top: 2px;
+    padding: 0 6px;
+    color: #3987e5;
+}
+
+/* ---------- Buttons ---------- */
+QPushButton {
+    background-color: #3987e5;
+    color: #ffffff;
+    border: none;
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-weight: 600;
+}
+QPushButton:hover {
+    background-color: #5598e7;
+}
+QPushButton:pressed {
+    background-color: #5598e7;
+    padding-top: 9px;
+}
+QPushButton:disabled {
+    background-color: #242422;
+    color: #898781;
+}
+
+/* ---------- Inputs ---------- */
+QLineEdit, QComboBox, QDoubleSpinBox, QSpinBox, QTextEdit {
+    background-color: #1a1a19;
+    color: #ffffff;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 6px;
+    padding: 5px 8px;
+    selection-background-color: #3987e5;
+}
+QLineEdit:focus, QComboBox:focus, QDoubleSpinBox:focus, QSpinBox:focus, QTextEdit:focus {
+    border: 1px solid #3987e5;
+}
+QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled {
+    color: #898781;
+    background-color: #242422;
+}
+QComboBox::drop-down { border: none; width: 22px; }
+QCheckBox, QLabel { color: #ffffff; }
+QCheckBox::indicator {
+    width: 16px; height: 16px; border-radius: 4px;
+    border: 1px solid rgba(255,255,255,0.12);
+    background: #1a1a19;
+}
+QCheckBox::indicator:checked {
+    background: #3987e5;
+    border: 1px solid #3987e5;
+}
+
+/* ---------- Progress bar ---------- */
+QProgressBar {
+    background-color: #242422;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    height: 18px;
+    text-align: center;
+    color: #ffffff;
+    font-weight: 600;
+}
+QProgressBar::chunk {
+    border-radius: 7px;
+    background-color: #3987e5;
+}
+
+/* ---------- Tables ---------- */
+QTableView, QTableWidget {
+    background-color: #1a1a19;
+    alternate-background-color: #242422;
+    gridline-color: #2c2c2a;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 8px;
+    selection-background-color: #3987e5;
+    selection-color: #ffffff;
+}
+QHeaderView::section {
+    background-color: #242422;
+    color: #c3c2b7;
+    padding: 6px;
+    border: none;
+    border-bottom: 2px solid #3987e5;
+    font-weight: 600;
+}
+
+/* ---------- Splitters / scrollbars ---------- */
+QSplitter::handle {
+    background: rgba(255,255,255,0.12);
+}
+QSplitter::handle:hover {
+    background: #3987e5;
+}
+QScrollBar:vertical {
+    background: transparent;
+    width: 10px;
+    margin: 0;
+}
+QScrollBar::handle:vertical {
+    background: rgba(255,255,255,0.12);
+    border-radius: 5px;
+    min-height: 24px;
+}
+QScrollBar::handle:vertical:hover {
+    background: #3987e5;
+}
+QScrollBar:horizontal {
+    background: transparent;
+    height: 10px;
+}
+QScrollBar::handle:horizontal {
+    background: rgba(255,255,255,0.12);
+    border-radius: 5px;
+    min-width: 24px;
+}
+QScrollBar::add-line, QScrollBar::sub-line { height: 0; width: 0; }
+
+/* ---------- Status bar ---------- */
+QStatusBar {
+    background: #1a1a19;
+    color: #c3c2b7;
+}
+
+/* ---------- Stat cards (summary frames) ---------- */
+QFrame#frameTotalSamples, QFrame#frameMatchedSamples, QFrame#frameMAE,
+QFrame#frameMaxError, QFrame#frameRMSE, QFrame#frameMatchPercentage {
+    background: #1a1a19;
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 10px;
+    padding: 10px;
+}
+QFrame#frameTotalSamples { border-left: 4px solid #3987e5; }
+QFrame#frameMatchedSamples { border-left: 4px solid #199e70; }
+QFrame#frameMAE { border-left: 4px solid #9085e9; }
+QFrame#frameMaxError { border-left: 4px solid #d95926; }
+QFrame#frameRMSE { border-left: 4px solid #d55181; }
+QFrame#frameMatchPercentage { border-left: 4px solid #0ca30c; }
+
+QLabel#labelTotalSamplesTitle, QLabel#labelMatchedSamplesTitle, QLabel#labelMAETitle,
+QLabel#labelMaxErrorTitle, QLabel#labelRMSETitle, QLabel#labelMatchPercentageTitle {
+    color: #898781;
+    font-weight: 600;
+    font-size: 9pt;
+}
+QLabel#labelTotalSamplesValue, QLabel#labelMatchedSamplesValue, QLabel#labelMAEValue,
+QLabel#labelMaxErrorValue, QLabel#labelRMSEValue, QLabel#labelMatchPercentageValue {
+    font-size: 22px;
+    font-weight: 700;
+    color: #ffffff;
+}
+</string>
+  </property>
+  <widget class="QWidget" name="centralwidget">
+   <layout class="QVBoxLayout" name="centralLayout">
+    <item>
+     <widget class="QTabWidget" name="tabWidgetMain">
+      <property name="currentIndex">
+       <number>0</number>
+      </property>
+
+      <!-- ===================== TAB 1: LOAD & EXTRACT ===================== -->
+      <widget class="QWidget" name="tabLoadExtract">
+       <attribute name="title">
+        <string>📥  Load &amp; Extract</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="verticalLayoutLoad">
+        <item>
+         <widget class="QGroupBox" name="groupBoxTwinCsvSource">
+          <property name="title">
+           <string>Digital Twin Output (CSV)</string>
+          </property>
+          <layout class="QVBoxLayout" name="verticalLayoutTwinCsvSource">
+           <item>
+            <layout class="QHBoxLayout" name="horizontalLayoutTwinCsvBrowse">
+             <item>
+              <widget class="QPushButton" name="btnBrowseTwinCsv">
+               <property name="text">
+                <string>Browse Digital Twin CSV...</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="lineEditTwinCsvPath">
+               <property name="readOnly">
+                <bool>true</bool>
+               </property>
+               <property name="placeholderText">
+                <string>No Digital Twin CSV selected</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <widget class="QLabel" name="labelTwinCsvInfo">
+             <property name="text">
+              <string>No file loaded.</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="groupBoxEcuSource">
+          <property name="title">
+           <string>NXP MPC5744P / ECU Output (CSV)</string>
+          </property>
+          <layout class="QVBoxLayout" name="verticalLayoutEcuSource">
+           <item>
+            <layout class="QHBoxLayout" name="horizontalLayoutEcuBrowse">
+             <item>
+              <widget class="QPushButton" name="btnBrowseEcu">
+               <property name="text">
+                <string>Browse ECU CSV...</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLineEdit" name="lineEditEcuPath">
+               <property name="readOnly">
+                <bool>true</bool>
+               </property>
+               <property name="placeholderText">
+                <string>No ECU CSV selected</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <widget class="QLabel" name="labelEcuInfo">
+             <property name="text">
+              <string>No file loaded.</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <spacer name="verticalSpacerLoad">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>20</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="horizontalLayoutStartComparison">
+          <item>
+           <widget class="QPushButton" name="btnStartComparison">
+            <property name="enabled">
+             <bool>false</bool>
+            </property>
+            <property name="minimumSize">
+             <size>
+              <width>0</width>
+              <height>36</height>
+             </size>
+            </property>
+            <property name="text">
+             <string>Start Comparison</string>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QProgressBar" name="progressBarComparison">
+            <property name="value">
+             <number>0</number>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <widget class="QLabel" name="labelModeIndicator">
+          <property name="text">
+           <string>Mode: Offline (CSV) — load both files, then Start Comparison. Use Tab 7 (Live) to stream over MQTT instead.</string>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+
+      <!-- ===================== TAB 2: PREVIEW ===================== -->
+      <widget class="QWidget" name="tabPreview">
+       <attribute name="title">
+        <string>👁  Preview</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="verticalLayoutPreview">
+        <item>
+         <widget class="QSplitter" name="splitterPreview">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <widget class="QGroupBox" name="groupBoxTwinPreview">
+           <property name="title">
+            <string>Digital Twin Data Preview</string>
+           </property>
+           <layout class="QVBoxLayout" name="verticalLayoutTwinPreview">
+            <item>
+             <widget class="QLabel" name="labelTwinPreviewInfo">
+              <property name="text">
+               <string>0 rows</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QTableWidget" name="tableWidgetTwinPreview"/>
+            </item>
+           </layout>
+          </widget>
+          <widget class="QGroupBox" name="groupBoxEcuPreview">
+           <property name="title">
+            <string>ECU Data Preview</string>
+           </property>
+           <layout class="QVBoxLayout" name="verticalLayoutEcuPreview">
+            <item>
+             <widget class="QLabel" name="labelEcuPreviewInfo">
+              <property name="text">
+               <string>0 rows</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QTableWidget" name="tableWidgetEcuPreview"/>
+            </item>
+           </layout>
+          </widget>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+
+      <!-- ===================== TAB 3: STATISTICS ===================== -->
+      <widget class="QWidget" name="tabStatistics">
+       <attribute name="title">
+        <string>📊  Statistics</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="verticalLayoutStatistics">
+        <item>
+         <widget class="QGroupBox" name="groupBoxSummaryCards">
+          <property name="title">
+           <string>Comparison Summary</string>
+          </property>
+          <layout class="QHBoxLayout" name="horizontalLayoutSummaryCards">
+           <item>
+            <widget class="QFrame" name="frameTotalSamples">
+             <property name="frameShape">
+              <enum>QFrame::StyledPanel</enum>
+             </property>
+             <layout class="QVBoxLayout" name="verticalLayoutTotalSamples">
+              <item>
+               <widget class="QLabel" name="labelTotalSamplesTitle">
+                <property name="text">
+                 <string>Total Samples</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel" name="labelTotalSamplesValue">
+                <property name="text">
+                 <string>--</string>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+           </item>
+           <item>
+            <widget class="QFrame" name="frameMatchedSamples">
+             <property name="frameShape">
+              <enum>QFrame::StyledPanel</enum>
+             </property>
+             <layout class="QVBoxLayout" name="verticalLayoutMatchedSamples">
+              <item>
+               <widget class="QLabel" name="labelMatchedSamplesTitle">
+                <property name="text">
+                 <string>Aligned / Matched</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel" name="labelMatchedSamplesValue">
+                <property name="text">
+                 <string>--</string>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+           </item>
+           <item>
+            <widget class="QFrame" name="frameMAE">
+             <property name="frameShape">
+              <enum>QFrame::StyledPanel</enum>
+             </property>
+             <layout class="QVBoxLayout" name="verticalLayoutMAE">
+              <item>
+               <widget class="QLabel" name="labelMAETitle">
+                <property name="text">
+                 <string>Mean Abs Error</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel" name="labelMAEValue">
+                <property name="text">
+                 <string>--</string>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+           </item>
+           <item>
+            <widget class="QFrame" name="frameMaxError">
+             <property name="frameShape">
+              <enum>QFrame::StyledPanel</enum>
+             </property>
+             <layout class="QVBoxLayout" name="verticalLayoutMaxError">
+              <item>
+               <widget class="QLabel" name="labelMaxErrorTitle">
+                <property name="text">
+                 <string>Max Error</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel" name="labelMaxErrorValue">
+                <property name="text">
+                 <string>--</string>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+           </item>
+           <item>
+            <widget class="QFrame" name="frameRMSE">
+             <property name="frameShape">
+              <enum>QFrame::StyledPanel</enum>
+             </property>
+             <layout class="QVBoxLayout" name="verticalLayoutRMSE">
+              <item>
+               <widget class="QLabel" name="labelRMSETitle">
+                <property name="text">
+                 <string>RMSE</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel" name="labelRMSEValue">
+                <property name="text">
+                 <string>--</string>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+           </item>
+           <item>
+            <widget class="QFrame" name="frameMatchPercentage">
+             <property name="frameShape">
+              <enum>QFrame::StyledPanel</enum>
+             </property>
+             <layout class="QVBoxLayout" name="verticalLayoutMatchPercentage">
+              <item>
+               <widget class="QLabel" name="labelMatchPercentageTitle">
+                <property name="text">
+                 <string>Match % (within tol.)</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel" name="labelMatchPercentageValue">
+                <property name="text">
+                 <string>--</string>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="labelPerSignalBreakdownTitle">
+          <property name="text">
+           <string>Per-Signal Breakdown</string>
+          </property>
+          <property name="styleSheet">
+           <string>font-weight: bold;</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QTableWidget" name="tableWidgetPerSignalStats"/>
+        </item>
+        <item>
+         <widget class="QLabel" name="labelWorstMismatchesTitle">
+          <property name="text">
+           <string>Worst Mismatched Samples</string>
+          </property>
+          <property name="styleSheet">
+           <string>font-weight: bold;</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QTableWidget" name="tableWidgetWorstMismatches"/>
+        </item>
+       </layout>
+      </widget>
+
+      <!-- ===================== TAB 4: GRAPHS / OVERLAY ===================== -->
+      <widget class="QWidget" name="tabGraphs">
+       <attribute name="title">
+        <string>📈  Graphs / Overlay</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="verticalLayoutGraphs">
+        <item>
+         <widget class="QSplitter" name="splitterGraphs">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <widget class="QWidget" name="widgetVoltagePlotContainer">
+           <layout class="QVBoxLayout" name="verticalLayoutVoltagePlot">
+            <item>
+             <widget class="QLabel" name="labelVoltagePlotTitle">
+              <property name="text">
+               <string>Voltage — Digital Twin vs ECU</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="PlotWidget" name="plotWidgetVoltage" native="true"/>
+            </item>
+           </layout>
+          </widget>
+          <widget class="QWidget" name="widgetCurrentPlotContainer">
+           <layout class="QVBoxLayout" name="verticalLayoutCurrentPlot">
+            <item>
+             <widget class="QLabel" name="labelCurrentPlotTitle">
+              <property name="text">
+               <string>Current — Digital Twin vs ECU</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="PlotWidget" name="plotWidgetCurrent" native="true"/>
+            </item>
+           </layout>
+          </widget>
+          <widget class="QWidget" name="widgetTemperaturePlotContainer">
+           <layout class="QVBoxLayout" name="verticalLayoutTemperaturePlot">
+            <item>
+             <widget class="QLabel" name="labelTemperaturePlotTitle">
+              <property name="text">
+               <string>Temperature — Digital Twin vs ECU</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="PlotWidget" name="plotWidgetTemperature" native="true"/>
+            </item>
+           </layout>
+          </widget>
+          <widget class="QWidget" name="widgetErrorPlotContainer">
+           <layout class="QVBoxLayout" name="verticalLayoutErrorPlot">
+            <item>
+             <widget class="QLabel" name="labelErrorPlotTitle">
+              <property name="text">
+               <string>Error Over Time (ECU − Digital Twin)</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="PlotWidget" name="plotWidgetError" native="true"/>
+            </item>
+           </layout>
+          </widget>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+
+      <!-- ===================== TAB 5: CONFIG / TOLERANCE ===================== -->
+      <widget class="QWidget" name="tabConfig">
+       <attribute name="title">
+        <string>⚙  Config / Tolerance</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="verticalLayoutConfig">
+        <item>
+         <widget class="QGroupBox" name="groupBoxTolerance">
+          <property name="title">
+           <string>Tolerance Thresholds (%)</string>
+          </property>
+          <layout class="QFormLayout" name="formLayoutTolerance">
+           <item row="0" column="0">
+            <widget class="QLabel" name="labelVoltageToleranceCaption">
+             <property name="text">
+              <string>Voltage Tolerance (%)</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+<widget class="QDoubleSpinBox" name="doubleSpinBoxVoltageTolerance">
+              <property name="decimals">
+               <number>4</number>
+              </property>
+              <property name="minimum">
+               <double>0.000000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>50.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.010000000000000</double>
+              </property>
+              <property name="value">
+               <double>2.000000000000000</double>
+              </property>
+             </widget>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="labelCurrentToleranceCaption">
+             <property name="text">
+              <string>Current Tolerance (%)</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1">
+<widget class="QDoubleSpinBox" name="doubleSpinBoxCurrentTolerance">
+              <property name="decimals">
+               <number>4</number>
+              </property>
+              <property name="minimum">
+               <double>0.000000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>50.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.010000000000000</double>
+              </property>
+              <property name="value">
+               <double>2.000000000000000</double>
+              </property>
+             </widget>
+           </item>
+           <item row="2" column="0">
+            <widget class="QLabel" name="labelTemperatureToleranceCaption">
+             <property name="text">
+              <string>Temperature Tolerance (%)</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="1">
+<widget class="QDoubleSpinBox" name="doubleSpinBoxTemperatureTolerance">
+              <property name="decimals">
+               <number>4</number>
+              </property>
+              <property name="minimum">
+               <double>0.000000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>50.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.010000000000000</double>
+              </property>
+              <property name="value">
+               <double>2.000000000000000</double>
+              </property>
+             </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="groupBoxSignalsToggle">
+          <property name="title">
+           <string>Signals to Include</string>
+          </property>
+          <layout class="QHBoxLayout" name="horizontalLayoutSignalsToggle">
+           <item>
+            <widget class="QCheckBox" name="checkBoxIncludeVoltage">
+             <property name="text">
+              <string>Voltage</string>
+             </property>
+             <property name="checked">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QCheckBox" name="checkBoxIncludeCurrent">
+             <property name="text">
+              <string>Current</string>
+             </property>
+             <property name="checked">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QCheckBox" name="checkBoxIncludeTemperature">
+             <property name="text">
+              <string>Temperature</string>
+             </property>
+             <property name="checked">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="groupBoxAlignment">
+          <property name="title">
+           <string>Timebase Alignment Method</string>
+          </property>
+          <layout class="QHBoxLayout" name="horizontalLayoutAlignment">
+           <item>
+            <widget class="QComboBox" name="comboBoxAlignmentMethod">
+             <item>
+              <property name="text">
+               <string>Nearest Timestamp</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>Linear Interpolation</string>
+              </property>
+             </item>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <spacer name="verticalSpacerConfig">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>20</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
+         <widget class="QPushButton" name="btnApplyRerun">
+          <property name="minimumSize">
+           <size>
+            <width>0</width>
+            <height>36</height>
+           </size>
+          </property>
+          <property name="text">
+           <string>Apply &amp; Re-run Comparison</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+
+      <!-- ===================== TAB 6: REPORT / EXPORT ===================== -->
+      <widget class="QWidget" name="tabReport">
+       <attribute name="title">
+        <string>📄  Report / Export</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="verticalLayoutReport">
+        <item>
+         <widget class="QGroupBox" name="groupBoxExportReport">
+          <property name="title">
+           <string>Export Full Comparison Report</string>
+          </property>
+          <layout class="QHBoxLayout" name="horizontalLayoutExportReport">
+           <item>
+            <widget class="QLabel" name="labelReportFormatCaption">
+             <property name="text">
+              <string>Format:</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QComboBox" name="comboBoxReportFormat">
+             <item>
+              <property name="text">
+               <string>PDF</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>HTML</string>
+              </property>
+             </item>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="btnExportReport">
+             <property name="text">
+              <string>Export Report...</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="groupBoxExportData">
+          <property name="title">
+           <string>Export Raw Aligned Comparison Table</string>
+          </property>
+          <layout class="QHBoxLayout" name="horizontalLayoutExportData">
+           <item>
+            <widget class="QLabel" name="labelDataFormatCaption">
+             <property name="text">
+              <string>Format:</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QComboBox" name="comboBoxDataFormat">
+             <item>
+              <property name="text">
+               <string>CSV</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>Excel</string>
+              </property>
+             </item>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="btnExportData">
+             <property name="text">
+              <string>Export Table...</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="labelExportLogTitle">
+          <property name="text">
+           <string>Export Log</string>
+          </property>
+          <property name="styleSheet">
+           <string>font-weight: bold;</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QTextEdit" name="textEditExportLog">
+          <property name="readOnly">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </widget>
+
+      <!-- ===================== TAB 7: LIVE (MQTT) ===================== -->
+      <widget class="QWidget" name="tabLiveMode">
+       <attribute name="title">
+        <string>📡  Live (MQTT)</string>
+       </attribute>
+       <layout class="QVBoxLayout" name="verticalLayoutLiveMode">
+        <item>
+         <widget class="QLabel" name="labelLiveModeInfo">
+          <property name="text">
+           <string>Live mode streams both the Digital Twin output and the ECU output over MQTT and feeds them into the same comparison engine used for offline CSV comparison. Connect to the broker, then incoming samples populate the Preview, Statistics, and Graphs tabs in real time.</string>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="groupBoxMqttBroker">
+          <property name="title">
+           <string>MQTT Broker</string>
+          </property>
+          <layout class="QFormLayout" name="formLayoutMqttBroker">
+           <item row="0" column="0">
+            <widget class="QLabel" name="labelMqttHostCaption">
+             <property name="text">
+              <string>Broker Host / IP:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QLineEdit" name="lineEditMqttHost">
+             <property name="placeholderText">
+              <string>localhost</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="labelMqttPortCaption">
+             <property name="text">
+              <string>Port:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1">
+            <widget class="QSpinBox" name="spinBoxMqttPort">
+             <property name="minimum">
+              <number>1</number>
+             </property>
+             <property name="maximum">
+              <number>65535</number>
+             </property>
+             <property name="value">
+              <number>1883</number>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="0">
+            <widget class="QLabel" name="labelMqttQosCaption">
+             <property name="text">
+              <string>QoS:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="1">
+            <widget class="QComboBox" name="comboBoxMqttQos">
+             <item>
+              <property name="text">
+               <string>0 — At most once</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>1 — At least once</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>2 — Exactly once</string>
+              </property>
+             </item>
+            </widget>
+           </item>
+           <item row="3" column="0">
+            <widget class="QLabel" name="labelMqttUserCaption">
+             <property name="text">
+              <string>Username (opt.):</string>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="1">
+            <widget class="QLineEdit" name="lineEditMqttUser">
+             <property name="placeholderText">
+              <string>(anonymous)</string>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="0">
+            <widget class="QLabel" name="labelMqttPassCaption">
+             <property name="text">
+              <string>Password (opt.):</string>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="1">
+            <widget class="QLineEdit" name="lineEditMqttPass">
+             <property name="echoMode">
+              <enum>QLineEdit::Password</enum>
+             </property>
+             <property name="placeholderText">
+              <string>(none)</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="groupBoxMqttTopics">
+          <property name="title">
+           <string>MQTT Topic Roots</string>
+          </property>
+          <layout class="QFormLayout" name="formLayoutMqttTopics">
+           <item row="0" column="0">
+            <widget class="QLabel" name="labelMqttTwinTopicCaption">
+             <property name="text">
+              <string>Digital Twin topic:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QLineEdit" name="lineEditMqttTwinTopic">
+             <property name="text">
+              <string>bms/twin/#</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="labelMqttEcuTopicCaption">
+             <property name="text">
+              <string>ECU topic:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1">
+            <widget class="QLineEdit" name="lineEditMqttEcuTopic">
+             <property name="text">
+              <string>bms/actual/#</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+</widget>
+         </item>
+         <item>
+          <widget class="QGroupBox" name="groupBoxLiveUpdate">
+           <property name="title">
+            <string>Live Update</string>
+           </property>
+           <layout class="QFormLayout" name="formLayoutLiveUpdate">
+            <item row="0" column="0" colspan="2">
+             <widget class="QCheckBox" name="checkBoxLiveAutoRefresh">
+              <property name="text">
+               <string>Auto-refresh (re-run align + statistics on a timer)</string>
+              </property>
+              <property name="checked">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="0">
+             <widget class="QLabel" name="labelLiveIntervalCaption">
+              <property name="text">
+               <string>Refresh interval:</string>
+              </property>
+             </widget>
+            </item>
+            <item row="1" column="1">
+             <layout class="QHBoxLayout" name="horizontalLayoutLiveInterval">
+              <item>
+               <widget class="QSpinBox" name="spinBoxLiveInterval">
+                <property name="minimum">
+                 <number>50</number>
+                </property>
+                <property name="maximum">
+                 <number>10000</number>
+                </property>
+                <property name="singleStep">
+                 <number>50</number>
+                </property>
+                <property name="value">
+                 <number>500</number>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel" name="labelLiveIntervalUnit">
+                <property name="text">
+                 <string>ms</string>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item>
+          <layout class="QHBoxLayout" name="horizontalLayoutLiveControls">
+          <item>
+           <widget class="QPushButton" name="btnLiveConnect">
+            <property name="minimumSize">
+             <size>
+              <width>0</width>
+              <height>36</height>
+             </size>
+            </property>
+            <property name="text">
+             <string>Connect Live Stream</string>
+            </property>
+            <property name="checkable">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
+<widget class="QLabel" name="labelLiveStatus">
+             <property name="text">
+              <string>Status: Disconnected</string>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QPushButton" name="btnLiveSnapshot">
+             <property name="text">
+              <string>Freeze &amp; Take Snapshot</string>
+             </property>
+            </widget>
+           </item>
+          </layout>
+        </item>
+        <item>
+         <spacer name="verticalSpacerLiveMode">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>20</width>
+            <height>40</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </widget>
+
+     </widget>
+    </item>
+   </layout>
+  </widget>
+  <widget class="QMenuBar" name="menubar">
+   <property name="geometry">
+    <rect>
+     <x>0</x>
+     <y>0</y>
+     <width>1280</width>
+     <height>22</height>
+    </rect>
+   </property>
+  </widget>
+  <widget class="QStatusBar" name="statusbar"/>
+ </widget>
+ <customwidgets>
+  <customwidget>
+   <class>PlotWidget</class>
+   <extends>QWidget</extends>
+   <header>pyqtgraph</header>
+   <container>1</container>
+  </customwidget>
+ </customwidgets>
+ <resources/>
+ <connections/>
+</ui>
