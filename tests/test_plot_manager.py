@@ -121,3 +121,68 @@ def test_partial_three_signal_ecu_only_vit_on_error(main_window,
     )
     pm.update(aligned)
     assert _curves(main_window.plotWidgetError) == 3  # V/I/T only
+
+
+# ---------------------------------------------------------------------------
+# Threshold warnings
+# ---------------------------------------------------------------------------
+def test_threshold_exceeded_adds_flood_curve_and_warning_label(
+    main_window, make_aligned_data,
+):
+    aligned = make_aligned_data(
+        timestamps=[0.0, 0.1, 0.2, 0.3],
+        signals={"voltage": ([3.30, 3.31, 3.40, 3.50],
+                             [3.30, 3.31, 3.42, 3.55])},
+    )
+    label = QtWidgets.QLabel()
+    pm = PlotManager(
+        main_window.plotWidgetVoltage,
+        main_window.plotWidgetCurrent,
+        main_window.plotWidgetTemperature,
+        main_window.plotWidgetError,
+        warning_labels={"voltage": label},
+    )
+    pm.update(aligned, thresholds={"voltage": (True, 3.4)})
+
+    # twin + ECU + the red "over limit" flood curve.
+    assert _curves(main_window.plotWidgetVoltage) == 3
+    assert "3.4" in label.text()
+    assert "0.3" in label.text()  # worst breach is the last sample
+
+
+def test_threshold_disabled_draws_no_flood_curve(main_window, make_aligned_data):
+    aligned = make_aligned_data(
+        timestamps=[0.0, 0.1],
+        signals={"voltage": ([3.30, 3.31], [3.30, 3.55])},
+    )
+    label = QtWidgets.QLabel()
+    pm = PlotManager(
+        main_window.plotWidgetVoltage,
+        main_window.plotWidgetCurrent,
+        main_window.plotWidgetTemperature,
+        main_window.plotWidgetError,
+        warning_labels={"voltage": label},
+    )
+    pm.update(aligned, thresholds={"voltage": (False, 3.4)})
+
+    assert _curves(main_window.plotWidgetVoltage) == 2  # no flood curve
+    assert label.text() == ""
+
+
+def test_threshold_never_exceeded_keeps_label_empty(main_window, make_aligned_data):
+    aligned = make_aligned_data(
+        timestamps=[0.0, 0.1],
+        signals={"voltage": ([3.30, 3.31], [3.30, 3.31])},
+    )
+    label = QtWidgets.QLabel()
+    pm = PlotManager(
+        main_window.plotWidgetVoltage,
+        main_window.plotWidgetCurrent,
+        main_window.plotWidgetTemperature,
+        main_window.plotWidgetError,
+        warning_labels={"voltage": label},
+    )
+    pm.update(aligned, thresholds={"voltage": (True, 4.2)})
+
+    assert _curves(main_window.plotWidgetVoltage) == 2  # no breach, no flood
+    assert label.text() == ""

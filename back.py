@@ -71,6 +71,8 @@ from export_engine import (
 )
 from mqtt_worker import MqttWorker
 from live_controller import LiveController
+from event_detector import EventDetector
+from event_window import EventWindow
 
 
 # ---------------------------------------------------------------------------
@@ -172,6 +174,27 @@ def _populate_worst_mismatches_table(
     )
 
 
+def _aligned_row_to_dicts(aligned: AlignedData, i: int) -> tuple:
+    """One aligned row -> ``(real_data, digital_twin_data)`` dicts.
+
+    ECU is the "real" side (event_detector's convention matches
+    alignment_engine's: ECU is ground truth). A signal is only included
+    when its value at this row isn't NaN, so an unmatched sample reads
+    as "missing" to ``EventDetector`` rather than a bogus NaN comparison.
+    """
+    ts = float(aligned.timestamps[i])
+    real: dict = {"timestamp": ts}
+    twin: dict = {"timestamp": ts}
+    for name, sig in aligned.signals.items():
+        ecu_v = float(sig.ecu_values[i])
+        twin_v = float(sig.twin_values[i])
+        if not math.isnan(ecu_v):
+            real[name] = ecu_v
+        if not math.isnan(twin_v):
+            twin[name] = twin_v
+    return real, twin
+
+
 # ---------------------------------------------------------------------------
 # MainWindow
 # ---------------------------------------------------------------------------
@@ -206,6 +229,10 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
             self.plotWidgetCurrent,
             self.plotWidgetTemperature,
             self.plotWidgetError,
+            warning_labels={
+                "voltage": self.labelVoltageWarning,
+                "current": self.labelCurrentWarning,
+            },
         )
 
         # --- MQTT worker (Live tab) ---------------------------------------
@@ -220,6 +247,21 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         # stopped on connect/disconnect.
         self.live_thread: Optional[QtCore.QThread] = None
         self.live_controller: Optional[LiveController] = None
+
+        # --- Event Detection (Tab 8) ---------------------------------------
+        # EventWindow is a plain QWidget (not part of the pyuic5-generated
+        # f.py) — the .ui file only reserves an empty tab + layout for it,
+        # so it's embedded here rather than hand-authored in Designer XML.
+        # Two detector instances because the two data sources need
+        # different lifetimes: the offline one is thrown away and rebuilt
+        # on every full run (a "run" is a self-contained batch), while the
+        # live one must persist across ticks so spike/freeze/oscillation
+        # history isn't lost between re-align timer firings.
+        self.event_window = EventWindow()
+        self.tabEvents.layout().addWidget(self.event_window)
+        self.event_detector = EventDetector()
+        self.live_event_detector = EventDetector()
+        self._live_event_last_ts: float = float("-inf")
 
         # --- Wire everything ---------------------------------------------
         self._connect_signals()
@@ -240,6 +282,21 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
                    self.checkBoxIncludeCurrent,
                    self.checkBoxIncludeTemperature):
             cb.stateChanged.connect(self.on_signal_checkbox_changed)
+
+        # Tab 5: Threshold warnings — enable checkbox toggles its spinbox
+        # and both re-render the plots (no realignment needed).
+        self.checkBoxEnableVoltageThreshold.toggled.connect(
+            self.doubleSpinBoxVoltageThreshold.setEnabled
+        )
+        self.checkBoxEnableCurrentThreshold.toggled.connect(
+            self.doubleSpinBoxCurrentThreshold.setEnabled
+        )
+        for w in (self.checkBoxEnableVoltageThreshold,
+                  self.checkBoxEnableCurrentThreshold):
+            w.toggled.connect(self.on_signal_checkbox_changed)
+        for w in (self.doubleSpinBoxVoltageThreshold,
+                  self.doubleSpinBoxCurrentThreshold):
+            w.valueChanged.connect(self.on_signal_checkbox_changed)
 
         # Tab 6: Export
         self.btnExportData.clicked.connect(self.on_export_data)
@@ -421,7 +478,11 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         self._populate_statistics_tab(stats)
 
         # --- Graphs tab -------------------------------------------------
-        self.plot_manager.update(aligned, self._enabled_signals_set())
+        self.plot_manager.update(aligned, self._enabled_signals_set(),
+                                 self._read_threshold_settings())
+
+        # --- Events tab ---------------------------------------------------
+        self._run_event_detection(aligned)
 
         # --- Re-enable buttons -----------------------------------------
         self.btnStartComparison.setEnabled(True)
@@ -449,6 +510,49 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         self.labelMatchPercentageValue.setText(f"{stats.match_pct:.2f} %")
         _populate_per_signal_table(self.tableWidgetPerSignalStats, stats)
         _populate_worst_mismatches_table(self.tableWidgetWorstMismatches, stats)
+
+    # ------------------------------------------------------------------
+    # Tab 8 — Event Detection
+    # ------------------------------------------------------------------
+    def _run_event_detection(self, aligned: AlignedData) -> None:
+        """Full offline pass: fresh detector, replay the whole aligned table.
+
+        Runs on Start Comparison *and* Apply & Re-run (both funnel through
+        ``on_comparison_finished``) — a full run is a self-contained batch,
+        so the event log is rebuilt from scratch each time rather than
+        appended to, matching the Statistics/Graphs tabs' behaviour.
+        Each row's own timestamp drives the detector's ``now`` so
+        Timeout/Communication-Loss are judged against the recorded
+        sample cadence, not how fast this loop happens to execute.
+        """
+        self.event_detector = EventDetector()
+        self.event_window.clear()
+        alerts = []
+        for i in range(aligned.n_total):
+            real, twin = _aligned_row_to_dicts(aligned, i)
+            alerts += self.event_detector.update(
+                real, twin, now=float(aligned.timestamps[i])
+            )
+        self.event_window.add_alerts(alerts)
+
+    def _run_live_event_detection(self, aligned: AlignedData) -> None:
+        """Incremental pass: only rows newer than the last one we've seen.
+
+        ``aligned`` is the *whole* current snapshot on every tick (the
+        live buffer is a ring buffer, so row indices aren't stable across
+        ticks once old rows get trimmed) — cursor by timestamp instead of
+        index, and keep the same EventDetector alive across ticks so
+        spike/freeze/oscillation history spans the whole session.
+        """
+        alerts = []
+        for i in range(aligned.n_total):
+            ts = float(aligned.timestamps[i])
+            if ts <= self._live_event_last_ts:
+                continue
+            real, twin = _aligned_row_to_dicts(aligned, i)
+            alerts += self.live_event_detector.update(real, twin, now=ts)
+            self._live_event_last_ts = ts
+        self.event_window.add_alerts(alerts)
 
     # ------------------------------------------------------------------
     # Tab 5 — Config: Apply & Re-run + checkbox re-render
@@ -488,7 +592,21 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         if self.aligned_data is None:
             return
         self.plot_manager.update(self.aligned_data,
-                                 self._enabled_signals_set())
+                                 self._enabled_signals_set(),
+                                 self._read_threshold_settings())
+
+    def _read_threshold_settings(self) -> dict:
+        """Read the Config tab's threshold-warning widgets.
+
+        Returns ``{"voltage": (enabled, value), "current": (enabled,
+        value)}`` for :meth:`PlotManager.update`.
+        """
+        return {
+            "voltage": (self.checkBoxEnableVoltageThreshold.isChecked(),
+                        float(self.doubleSpinBoxVoltageThreshold.value())),
+            "current": (self.checkBoxEnableCurrentThreshold.isChecked(),
+                        float(self.doubleSpinBoxCurrentThreshold.value())),
+        }
 
     def _read_config_settings(self) -> tuple:
         """Read the Config tab's widgets and return (method, tolerances)."""
@@ -635,6 +753,11 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
             self.live_controller.start.emit(
                 interval_ms, twin_topic, ecu_topic,
             )
+            # Same reset for the Events tab: a new session means a new
+            # event history, not a continuation of the last one.
+            self.live_event_detector = EventDetector()
+            self._live_event_last_ts = float("-inf")
+            self.event_window.clear()
 
     def _mqtt_disconnect(self) -> None:
         if self.mqtt_worker is not None:
@@ -723,7 +846,11 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
                     f"{ecu_lr.time_range[1]:.2f} s)"
                 )
         # Re-render plots with the currently-enabled signal set.
-        self.plot_manager.update(aligned, self._enabled_signals_set())
+        self.plot_manager.update(aligned, self._enabled_signals_set(),
+                                 self._read_threshold_settings())
+        # Feed only the newly-arrived rows through the (persistent) live
+        # event detector.
+        self._run_live_event_detection(aligned)
 
     def _on_live_stats(self, stats: StatisticsResult) -> None:
         """New statistics snapshot — populate the Statistics tab."""
@@ -810,7 +937,8 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         self.aligned_data = aligned
         self.stats_result = stats
         self._populate_statistics_tab(stats)
-        self.plot_manager.update(aligned, self._enabled_signals_set())
+        self.plot_manager.update(aligned, self._enabled_signals_set(),
+                                 self._read_threshold_settings())
         self.statusBar().showMessage(
             "Live snapshot taken — Export tab now acts on this snapshot.", 6000,
         )
