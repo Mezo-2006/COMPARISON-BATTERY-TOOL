@@ -155,6 +155,19 @@ overlay for whatever's ticked, one combined error plot — before settling
 back on 5 always-on individual overlays + 1 selectable error plot. If you
 see references to `plotWidgetOverlay` anywhere, that's stale.)
 
+### 4.1b Graphs tab: scrollable, not squeezed
+
+Six full-size plots stacked in one tab don't fit any reasonable window
+height without shrinking to unreadable slivers — so `tabGraphs` wraps its
+`splitterGraphs` in a `QScrollArea` (`scrollAreaGraphs`, `widgetResizable
+= true`), and every one of the six `PlotWidget`s has `minimumSize` height
+`280` set in `f.ui`. The splitter still lets the user drag to give one
+plot more room than another; once the *total* minimum height exceeds the
+tab's visible area, the scroll area grows a vertical scrollbar instead of
+pyqtgraph's plots being squashed below readability. Keep the 280px floor
+(or raise it) on any new plot added here — dropping it is how this bug
+comes back.
+
 ### 4.2 Tolerance spinboxes
 
 - `decimals = 4`, `minimum = 0.0`, `maximum = 50.0`, `singleStep = 0.01`, default `2.0`.

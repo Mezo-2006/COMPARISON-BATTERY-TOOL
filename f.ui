@@ -595,11 +595,18 @@ QLabel#labelMaxErrorValue, QLabel#labelRMSEValue, QLabel#labelMatchPercentageVal
        </attribute>
        <layout class="QVBoxLayout" name="verticalLayoutGraphs">
         <item>
-         <widget class="QSplitter" name="splitterGraphs">
-          <property name="orientation">
-           <enum>Qt::Vertical</enum>
+         <widget class="QScrollArea" name="scrollAreaGraphs">
+          <property name="widgetResizable">
+           <bool>true</bool>
           </property>
-          <widget class="QWidget" name="widgetVoltagePlotContainer">
+          <widget class="QWidget" name="scrollAreaGraphsContents">
+           <layout class="QVBoxLayout" name="verticalLayoutScrollAreaGraphsContents">
+            <item>
+             <widget class="QSplitter" name="splitterGraphs">
+              <property name="orientation">
+               <enum>Qt::Vertical</enum>
+              </property>
+              <widget class="QWidget" name="widgetVoltagePlotContainer">
            <layout class="QVBoxLayout" name="verticalLayoutVoltagePlot">
             <item>
              <widget class="QLabel" name="labelVoltagePlotTitle">
@@ -622,7 +629,14 @@ QLabel#labelMaxErrorValue, QLabel#labelRMSEValue, QLabel#labelMatchPercentageVal
              </widget>
             </item>
             <item>
-             <widget class="PlotWidget" name="plotWidgetVoltage" native="true"/>
+             <widget class="PlotWidget" name="plotWidgetVoltage" native="true">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>280</height>
+               </size>
+              </property>
+             </widget>
             </item>
            </layout>
           </widget>
@@ -649,7 +663,14 @@ QLabel#labelMaxErrorValue, QLabel#labelRMSEValue, QLabel#labelMatchPercentageVal
              </widget>
             </item>
             <item>
-             <widget class="PlotWidget" name="plotWidgetCurrent" native="true"/>
+             <widget class="PlotWidget" name="plotWidgetCurrent" native="true">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>280</height>
+               </size>
+              </property>
+             </widget>
             </item>
            </layout>
           </widget>
@@ -663,7 +684,14 @@ QLabel#labelMaxErrorValue, QLabel#labelRMSEValue, QLabel#labelMatchPercentageVal
              </widget>
             </item>
             <item>
-             <widget class="PlotWidget" name="plotWidgetTemperature" native="true"/>
+             <widget class="PlotWidget" name="plotWidgetTemperature" native="true">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>280</height>
+               </size>
+              </property>
+             </widget>
             </item>
            </layout>
           </widget>
@@ -677,7 +705,14 @@ QLabel#labelMaxErrorValue, QLabel#labelRMSEValue, QLabel#labelMatchPercentageVal
              </widget>
             </item>
             <item>
-             <widget class="PlotWidget" name="plotWidgetSoc" native="true"/>
+             <widget class="PlotWidget" name="plotWidgetSoc" native="true">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>280</height>
+               </size>
+              </property>
+             </widget>
             </item>
            </layout>
           </widget>
@@ -691,7 +726,14 @@ QLabel#labelMaxErrorValue, QLabel#labelRMSEValue, QLabel#labelMatchPercentageVal
              </widget>
             </item>
             <item>
-             <widget class="PlotWidget" name="plotWidgetSoh" native="true"/>
+             <widget class="PlotWidget" name="plotWidgetSoh" native="true">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>280</height>
+               </size>
+              </property>
+             </widget>
             </item>
            </layout>
           </widget>
@@ -787,7 +829,18 @@ QLabel#labelMaxErrorValue, QLabel#labelRMSEValue, QLabel#labelMatchPercentageVal
              </widget>
             </item>
             <item>
-             <widget class="PlotWidget" name="plotWidgetError" native="true"/>
+             <widget class="PlotWidget" name="plotWidgetError" native="true">
+              <property name="minimumSize">
+               <size>
+                <width>0</width>
+                <height>280</height>
+               </size>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+             </widget>
             </item>
            </layout>
           </widget>
