@@ -240,7 +240,11 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
 
         # --- Plot manager -------------------------------------------------
         self.plot_manager = PlotManager(
-            self.plotWidgetOverlay,
+            self.plotWidgetVoltage,
+            self.plotWidgetCurrent,
+            self.plotWidgetTemperature,
+            self.plotWidgetSoc,
+            self.plotWidgetSoh,
             self.plotWidgetError,
             warning_labels={
                 "voltage": self.labelVoltageWarning,
@@ -628,12 +632,14 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
                                  self._read_threshold_settings())
 
     def on_signal_selection_changed(self, checked: bool) -> None:
-        """A Graphs-tab signal checkbox changed.
+        """An error-graph signal checkbox changed.
 
-        If "select only one" is armed, ticking a signal forces every
-        other signal checkbox off (radio-button behaviour built on plain
-        ``QCheckBox`` widgets, so the "Signals to Plot" row can stay a
-        single flat layout rather than switching widget types).
+        Only affects ``plotWidgetError`` — the five overlay plots (V/I/T/
+        SoC/SoH) always draw unconditionally. If "select only one" is
+        armed, ticking a signal forces every other signal checkbox off
+        (radio-button behaviour built on plain ``QCheckBox`` widgets, so
+        the "Signals to Include in Error Graph" row can stay a single
+        flat layout rather than switching widget types).
         """
         sender = self.sender()
         if (checked and self.checkBoxSignalSelectOnly.isChecked()
@@ -642,12 +648,14 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         self.on_signal_checkbox_changed()
 
     def on_select_only_one_toggled(self, checked: bool) -> None:
-        """Arming "select only one" immediately collapses to a single signal.
+        """Arming "select only one" immediately collapses the error graph
+        to a single signal.
 
         Keeps whichever signal was already checked (the first one, in
         Voltage/Current/Temperature/SoC/SoH order, if more than one was
-        ticked); if none was ticked, defaults to Voltage so the overlay
-        plot isn't left empty.
+        ticked); if none was ticked, defaults to Voltage so the error
+        graph isn't left empty. The five overlay plots are unaffected —
+        they never gate on this selection.
         """
         if checked:
             already_checked = [cb for cb in self._signal_checkboxes
@@ -704,11 +712,10 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         return method, tolerances
 
     def _enabled_signals_set(self) -> set:
-        """Signals ticked on the Graphs tab's "Signals to Plot" row.
+        """Signals ticked on the error graph's own selection row.
 
-        Drives both plots (overlay + error) identically — unlike the old
-        four-plot layout, SoC/SoH are no longer force-included; what's
-        ticked is what's drawn.
+        Only drives ``plotWidgetError`` — the five overlay plots (V/I/T/
+        SoC/SoH) always draw unconditionally and never consult this set.
         """
         return {name for cb, name in self._signal_checkbox_names.items()
                 if cb.isChecked()}

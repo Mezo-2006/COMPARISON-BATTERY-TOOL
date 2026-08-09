@@ -123,35 +123,37 @@ def test_graphs_tab_drawn(window, qapp):
     window.on_start_comparison()
     _pump(qapp, lambda: window.aligned_data is not None)
     qapp.processEvents()
-    no = len(window.plotWidgetOverlay.getPlotItem().listDataItems())
+    for plot in (window.plotWidgetVoltage, window.plotWidgetCurrent,
+                 window.plotWidgetTemperature, window.plotWidgetSoc,
+                 window.plotWidgetSoh):
+        assert len(plot.getPlotItem().listDataItems()) == 2  # twin + ECU
     ne = len(window.plotWidgetError.getPlotItem().listDataItems())
-    assert no == 10  # 5 signals * (twin + ECU), all ticked by default
-    assert ne == 5   # all five signals
+    assert ne == 5   # all five signals ticked by default
 
 
 # ---------------------------------------------------------------------------
-# Checkbox toggle re-renders plots without re-running the worker
+# Checkbox toggle re-renders the error graph only -- overlay plots are
+# unconditional and don't react to the error-graph selection.
 # ---------------------------------------------------------------------------
-def test_checkbox_toggle_updates_plots_only(window, qapp):
+def test_checkbox_toggle_updates_error_graph_only(window, qapp):
     window.on_start_comparison()
     _pump(qapp, lambda: window.aligned_data is not None)
     qapp.processEvents()
 
     window.checkBoxSignalVoltage.setChecked(False)
     qapp.processEvents()
-    no = len(window.plotWidgetOverlay.getPlotItem().listDataItems())
+    # Voltage's own overlay plot is untouched by the error-graph checkbox.
+    assert len(window.plotWidgetVoltage.getPlotItem().listDataItems()) == 2
     ne = len(window.plotWidgetError.getPlotItem().listDataItems())
-    # Voltage drops out of both plots (8 = 4 remaining signals * 2).
-    assert no == 8
-    assert ne == 4
+    assert ne == 4  # voltage dropped from the error graph
 
     window.checkBoxSignalVoltage.setChecked(True)
     qapp.processEvents()
-    assert len(window.plotWidgetOverlay.getPlotItem().listDataItems()) == 10
+    assert len(window.plotWidgetError.getPlotItem().listDataItems()) == 5
 
 
 # ---------------------------------------------------------------------------
-# "Select only one" collapses the signal-selection row to a single signal
+# "Select only one" collapses the error-graph selection to a single signal
 # ---------------------------------------------------------------------------
 def test_select_only_one_forces_single_signal(window, qapp):
     window.on_start_comparison()
@@ -165,7 +167,9 @@ def test_select_only_one_forces_single_signal(window, qapp):
     for cb in (window.checkBoxSignalCurrent, window.checkBoxSignalTemperature,
                window.checkBoxSignalSoc, window.checkBoxSignalSoh):
         assert not cb.isChecked()
-    assert len(window.plotWidgetOverlay.getPlotItem().listDataItems()) == 2
+    assert len(window.plotWidgetError.getPlotItem().listDataItems()) == 1
+    # Overlay plots don't care about the error-graph selection.
+    assert len(window.plotWidgetSoh.getPlotItem().listDataItems()) == 2
 
     # Ticking a different signal while armed swaps the selection instead
     # of adding to it.
@@ -173,7 +177,7 @@ def test_select_only_one_forces_single_signal(window, qapp):
     qapp.processEvents()
     assert not window.checkBoxSignalVoltage.isChecked()
     assert window.checkBoxSignalSoh.isChecked()
-    assert len(window.plotWidgetOverlay.getPlotItem().listDataItems()) == 2
+    assert len(window.plotWidgetError.getPlotItem().listDataItems()) == 1
 
     # Disarming it doesn't change the current selection, just frees it up.
     window.checkBoxSignalSelectOnly.setChecked(False)
@@ -182,7 +186,7 @@ def test_select_only_one_forces_single_signal(window, qapp):
     qapp.processEvents()
     assert window.checkBoxSignalSoh.isChecked()
     assert window.checkBoxSignalSoc.isChecked()
-    assert len(window.plotWidgetOverlay.getPlotItem().listDataItems()) == 4
+    assert len(window.plotWidgetError.getPlotItem().listDataItems()) == 2
 
 
 # ---------------------------------------------------------------------------

@@ -92,7 +92,7 @@ All files live in `final_tool/`.
 | `alignment_engine.py` | ~355 | nearest + interpolate alignment | Done |
 | `statistics_engine.py` | ~352 | per-signal + global metrics | Done |
 | `comparison_worker.py` | ~230 | QThread orchestrator (offline) | Done |
-| `plot_manager.py` | ~330 | pyqtgraph overlay+error 2-plot wrapper | Done |
+| `plot_manager.py` | ~330 | pyqtgraph 6-plot wrapper (5 overlays + error) | Done |
 | `export_engine.py` | ~463 | CSV/Excel/PDF/HTML export | Done |
 | `mqtt_worker.py` | ~188 | generic MQTT client | Done |
 | `live_schema.py` | ~400 | JSON payload parser + topic routing + id | Done |
@@ -113,36 +113,47 @@ Tests in `tests/` — **202 pytest tests, all passing (~5-8s)**.
 1. Load & Extract — file browse + Start Comparison
 2. Preview — twin + ECU QTableWidgets
 3. Statistics — 6 summary cards + per-signal + worst-mismatches tables
-4. Graphs/Overlay — 2 pyqtgraph PlotWidgets (overlay + error) + signal selection
+4. Graphs/Overlay — 6 pyqtgraph PlotWidgets: 5 unconditional per-signal
+   overlays (V/I/T/SoC/SoH) + 1 selectable error plot
 5. Config/Tolerance — 3 tolerance spinboxes + alignment combo + threshold warnings + Apply & Re-run
 6. Report/Export — CSV/Excel data + PDF/HTML report
 7. Live (MQTT) — broker config + topic roots + Auto-refresh + interval + Freeze/Snapshot
 
-### 4.1a Graphs/Overlay tab — signal selection (not per-signal plots)
+### 4.1a Graphs/Overlay tab — 5 unconditional overlays + 1 selectable error plot
 
-Redesigned from the original four fixed plots (V/I/T/error) to two:
+Six `PlotWidget`s:
 
-- `plotWidgetOverlay` — twin (dashed) vs ECU (solid) for every signal the
-  user ticks, all sharing one plot. Each signal keeps a stable colour
-  (see `plot_manager._SIGNAL_COLOURS`) across both twin/ECU curves and
-  the error plot.
-- `plotWidgetError` — one error curve (ECU − twin) per ticked signal.
+- `plotWidgetVoltage` / `Current` / `Temperature` / `Soc` / `Soh` — twin
+  (cornflower blue) vs ECU (near-black) on its own dedicated plot,
+  **unconditional**: each draws whenever that signal is present in the
+  aligned data. There is no checkbox for these five — they always show.
+- `plotWidgetError` — one error curve (ECU − twin) per signal ticked on
+  its own selection row, positioned directly above the error plot (not
+  above the whole tab, and not shared with the five overlay plots).
 
-Selection lives entirely on the Graphs tab now, not the Config tab:
-`checkBoxSignalVoltage` / `Current` / `Temperature` / `Soc` / `Soh`
-(all five, independently), plus `checkBoxSignalSelectOnly` which forces
-radio-button behaviour on top of the plain checkboxes — ticking one
-signal while it's armed unchecks the rest, and arming it collapses
-whatever's currently ticked down to one. `back.py`'s
-`_force_single_signal_selection` implements this with `blockSignals`
-guards (see `on_signal_selection_changed` / `on_select_only_one_toggled`).
-SoC/SoH are **no longer force-included** on the error plot — what's
-ticked is what's drawn, on both plots identically.
+The "Signals to Include in Error Graph" row —
+`checkBoxSignalVoltage` / `Current` / `Temperature` / `Soc` / `Soh` (all
+five, independently), plus `checkBoxSignalSelectOnly` — only ever
+affects `plotWidgetError`. `checkBoxSignalSelectOnly` forces radio-button
+behaviour on top of the plain checkboxes — ticking one signal while it's
+armed unchecks the rest, and arming it collapses whatever's currently
+ticked down to one. `back.py`'s `_force_single_signal_selection`
+implements this with `blockSignals` guards (see
+`on_signal_selection_changed` / `on_select_only_one_toggled`).
+`PlotManager._enabled_signals_set`/`update`'s `enabled_signals` parameter
+is consulted **only** by `_plot_errors` — `_plot_overlay` (used for all
+five individual plots) never looks at it.
 
 Threshold-warning highlighting (dashed limit line + red flood-fill,
-Config tab's `checkBoxEnableVoltageThreshold` / `Current`) still works
-per-signal on the shared overlay plot — `PlotManager._apply_threshold`
-is called once per enabled signal that has a configured threshold.
+Config tab's `checkBoxEnableVoltageThreshold` / `Current`) is drawn on
+the signal's own overlay plot — `PlotManager._apply_threshold` is called
+once per signal (V/I/T/SoC/SoH) that has a configured threshold,
+independent of the error graph's selection.
+
+(This tab briefly went through a "2 shared plots" design — one combined
+overlay for whatever's ticked, one combined error plot — before settling
+back on 5 always-on individual overlays + 1 selectable error plot. If you
+see references to `plotWidgetOverlay` anywhere, that's stale.)
 
 ### 4.2 Tolerance spinboxes
 
@@ -429,9 +440,10 @@ why the `id` dedup field exists.
 `_clear_legend` compat helper. If you upgrade pyqtgraph, check the
 legend API first.
 
-SoC / SoH are **not** force-included anymore (see §4.1a) — every signal,
-including SoC/SoH, only appears on either plot when its Graphs-tab
-checkbox is ticked.
+SoC / SoH now have their own dedicated overlay plots (see §4.1a) — like
+every signal's overlay plot, they're unconditional (no checkbox gates
+them). Only the error plot is checkbox-gated, and that gating applies
+equally to all five signals, including SoC/SoH.
 
 ---
 
