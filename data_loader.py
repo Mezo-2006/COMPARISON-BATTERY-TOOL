@@ -21,7 +21,7 @@ matched case-insensitively against a set of aliases so that the twin's CSV
 
     Alias group   Accepted header (case-insensitive, whitespace-trimmed)
     -----------   -------------------------------------------------------
-    timestamp     timestamp, time, t, ts, time_s, timestamp_s
+    timestamp     timestamp, time, t, ts, time_s, timestamp_s, id
     voltage       voltage, v, vbat, pack_voltage, voltage_v, batt_voltage
     current       current, i, ibat, pack_current, current_a, batt_current
     temperature   temperature, temp, t (only if voltage group didn't claim it),
@@ -66,7 +66,7 @@ import numpy as np
 # whitespace-stripped).  The first match wins, so put more-specific aliases
 # before less-specific ones.
 _ALIAS_MAP: dict[str, list[str]] = {
-    "timestamp":   ["timestamp", "time", "ts", "time_s", "timestamp_s"],
+    "timestamp":   ["timestamp", "time", "ts", "time_s", "timestamp_s", "id"],
     "voltage":    ["voltage", "v", "vbat", "pack_voltage", "voltage_v",
                    "batt_voltage"],
     "current":    ["current", "i", "ibat", "pack_current", "current_a",
@@ -337,9 +337,13 @@ def _resolve_columns(original: list[str]) -> tuple[dict[str, str], list[str]]:
         else:
             warnings.append(f"Duplicate header (case-variant) ignored: {col}")
 
-    # For each canonical group, find the first matching alias
+    # For each canonical group, find the first matching alias.
+    # "id" is handled as a timestamp fallback below so it doesn't steal
+    # timestamp from payloads that also carry a proper time key like "t".
     for canon, aliases in _ALIAS_MAP.items():
         for alias in aliases:
+            if canon == "timestamp" and alias == "id":
+                continue
             if alias in lower_to_original and canon not in used_canonical:
                 canonical_map[lower_to_original[alias]] = canon
                 used_canonical.add(canon)
@@ -348,14 +352,19 @@ def _resolve_columns(original: list[str]) -> tuple[dict[str, str], list[str]]:
     # Special rule for single-letter ``t``
     if "t" in lower_to_original and "timestamp" not in used_canonical \
        and "temperature" not in used_canonical:
-        # ``t`` without a ``v`` column → treat as temperature
-        canonical_map[lower_to_original["t"]] = "temperature"
-        used_canonical.add("temperature")
-    elif "t" in lower_to_original and "timestamp" not in used_canonical \
-         and "v" in lower_to_original:
-        # ``t`` + ``v`` present → treat ``t`` as timestamp (only if nothing
-        # else matched)
-        canonical_map[lower_to_original["t"]] = "timestamp"
+        # ``t`` + ``v`` present → treat ``t`` as timestamp (common twin
+        # layout), otherwise treat ``t`` as temperature.
+        if "v" in lower_to_original:
+            canonical_map[lower_to_original["t"]] = "timestamp"
+            used_canonical.add("timestamp")
+        else:
+            canonical_map[lower_to_original["t"]] = "temperature"
+            used_canonical.add("temperature")
+
+    # Timestamp fallback: if no explicit timestamp alias was found, accept
+    # "id" as the timestamp source.
+    if "timestamp" not in used_canonical and "id" in lower_to_original:
+        canonical_map[lower_to_original["id"]] = "timestamp"
         used_canonical.add("timestamp")
 
     return canonical_map, warnings

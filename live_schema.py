@@ -256,6 +256,8 @@ def _resolve_sample_columns(
 
     for canon, aliases in _ALIAS_MAP.items():
         for alias in aliases:
+            if canon == "timestamp" and alias == "id":
+                continue
             if alias in lower_to_original and canon not in used:
                 canonical_map[canon] = lower_to_original[alias]
                 used.add(canon)
@@ -274,6 +276,10 @@ def _resolve_sample_columns(
         else:
             canonical_map["temperature"] = lower_to_original["t"]
             used.add("temperature")
+
+    if "timestamp" not in used and "id" in lower_to_original:
+        canonical_map["timestamp"] = lower_to_original["id"]
+        used.add("timestamp")
 
     out: Dict[str, float] = {}
 
