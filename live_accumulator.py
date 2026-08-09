@@ -15,13 +15,20 @@ Design notes
 A long live session (hours, 10 Hz) would otherwise grow without bound.
 The buffer trims to two independent caps, either of which trips first:
 
-  - ``max_rows``  — keep at most N most recent rows per source.
-  - ``max_age_s`` — drop rows whose timestamp is older than
-    ``newest_t - max_age_s``.
+  - ``max_rows``   — keep at most N most recent rows per source.
+  - ``max_age_ms`` — drop rows whose timestamp is older than
+    ``newest_t - max_age_ms``.
 
-Defaults (10 000 rows, 600 s) bound a 10 Hz stream to ~17 minutes of
-history and ~80 KB per column — comfortable on any modern machine. Both
-are configurable per-source at construction.
+Defaults (10 000 rows, 600 000 ms = 10 minutes) bound a 10 Hz stream to
+~17 minutes of history and ~80 KB per column — comfortable on any modern
+machine. Both are configurable per-source at construction.
+
+**Timestamp unit: milliseconds.** ``timestamp`` values flowing through
+this buffer are real Unix epoch milliseconds (see
+``synthetic_data_generator``'s "Timestamp convention" section) — that's
+why ``max_age_ms`` is named/scaled in milliseconds rather than the
+seconds ``max_age_s`` this module used before real-time-based live
+testing existed. A real ECU/Simulink publisher must emit the same unit.
 
 **Why two DataFrames, not one?**
 The offline pipeline is built around two separate ``LoadResult``s
@@ -66,7 +73,7 @@ from live_schema import LiveSample
 # Defaults
 # ---------------------------------------------------------------------------
 DEFAULT_MAX_ROWS: int = 10_000
-DEFAULT_MAX_AGE_S: float = 600.0
+DEFAULT_MAX_AGE_MS: float = 600_000.0   # 10 minutes, in Unix-epoch milliseconds
 
 # Canonical column ordering — kept in sync with data_loader.
 _CANONICAL_COLUMNS: list[str] = [
@@ -88,10 +95,10 @@ class _SourceBuffer:
     :class:`LiveBuffer` which owns two of these.
     """
 
-    def __init__(self, source_label: str, max_rows: int, max_age_s: float):
+    def __init__(self, source_label: str, max_rows: int, max_age_ms: float):
         self.source_label = source_label
         self.max_rows = max_rows
-        self.max_age_s = max_age_s
+        self.max_age_ms = max_age_ms
         # Empty DataFrame — columns are added on demand as the first
         # sample carrying each arrives (pandas concat unions columns).
         # This keeps ``build_load_result``'s ``columns_found`` honest:
@@ -144,8 +151,8 @@ class _SourceBuffer:
         # --- Age cap -----------------------------------------------------
         ts = df["timestamp"]
         newest = float(ts.iloc[-1])
-        if self.max_age_s is not None and self.max_age_s > 0:
-            cutoff = newest - self.max_age_s
+        if self.max_age_ms is not None and self.max_age_ms > 0:
+            cutoff = newest - self.max_age_ms
             df = df[ts >= cutoff]
 
         # --- Row cap -----------------------------------------------------
@@ -221,11 +228,11 @@ class LiveBuffer:
     def __init__(
         self,
         max_rows: int = DEFAULT_MAX_ROWS,
-        max_age_s: float = DEFAULT_MAX_AGE_S,
+        max_age_ms: float = DEFAULT_MAX_AGE_MS,
     ):
         self._buffers = {
-            "twin": _SourceBuffer("twin", max_rows, max_age_s),
-            "ecu": _SourceBuffer("ecu", max_rows, max_age_s),
+            "twin": _SourceBuffer("twin", max_rows, max_age_ms),
+            "ecu": _SourceBuffer("ecu", max_rows, max_age_ms),
         }
 
     # ------------------------------------------------------------------

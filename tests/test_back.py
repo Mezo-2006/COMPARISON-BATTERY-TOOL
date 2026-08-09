@@ -123,10 +123,10 @@ def test_graphs_tab_drawn(window, qapp):
     window.on_start_comparison()
     _pump(qapp, lambda: window.aligned_data is not None)
     qapp.processEvents()
-    nv = len(window.plotWidgetVoltage.getPlotItem().listDataItems())
+    no = len(window.plotWidgetOverlay.getPlotItem().listDataItems())
     ne = len(window.plotWidgetError.getPlotItem().listDataItems())
-    assert nv == 2  # twin + ECU
-    assert ne == 5  # all five signals
+    assert no == 10  # 5 signals * (twin + ECU), all ticked by default
+    assert ne == 5   # all five signals
 
 
 # ---------------------------------------------------------------------------
@@ -137,17 +137,52 @@ def test_checkbox_toggle_updates_plots_only(window, qapp):
     _pump(qapp, lambda: window.aligned_data is not None)
     qapp.processEvents()
 
-    window.checkBoxIncludeVoltage.setChecked(False)
+    window.checkBoxSignalVoltage.setChecked(False)
     qapp.processEvents()
-    nv = len(window.plotWidgetVoltage.getPlotItem().listDataItems())
+    no = len(window.plotWidgetOverlay.getPlotItem().listDataItems())
     ne = len(window.plotWidgetError.getPlotItem().listDataItems())
-    assert nv == 0
-    # Error plot drops voltage (but keeps I/T + SoC/SoH).
+    # Voltage drops out of both plots (8 = 4 remaining signals * 2).
+    assert no == 8
     assert ne == 4
 
-    window.checkBoxIncludeVoltage.setChecked(True)
+    window.checkBoxSignalVoltage.setChecked(True)
     qapp.processEvents()
-    assert len(window.plotWidgetVoltage.getPlotItem().listDataItems()) == 2
+    assert len(window.plotWidgetOverlay.getPlotItem().listDataItems()) == 10
+
+
+# ---------------------------------------------------------------------------
+# "Select only one" collapses the signal-selection row to a single signal
+# ---------------------------------------------------------------------------
+def test_select_only_one_forces_single_signal(window, qapp):
+    window.on_start_comparison()
+    _pump(qapp, lambda: window.aligned_data is not None)
+    qapp.processEvents()
+
+    window.checkBoxSignalSelectOnly.setChecked(True)
+    qapp.processEvents()
+    # Arming it collapses the (all-five-ticked) default down to Voltage.
+    assert window.checkBoxSignalVoltage.isChecked()
+    for cb in (window.checkBoxSignalCurrent, window.checkBoxSignalTemperature,
+               window.checkBoxSignalSoc, window.checkBoxSignalSoh):
+        assert not cb.isChecked()
+    assert len(window.plotWidgetOverlay.getPlotItem().listDataItems()) == 2
+
+    # Ticking a different signal while armed swaps the selection instead
+    # of adding to it.
+    window.checkBoxSignalSoh.setChecked(True)
+    qapp.processEvents()
+    assert not window.checkBoxSignalVoltage.isChecked()
+    assert window.checkBoxSignalSoh.isChecked()
+    assert len(window.plotWidgetOverlay.getPlotItem().listDataItems()) == 2
+
+    # Disarming it doesn't change the current selection, just frees it up.
+    window.checkBoxSignalSelectOnly.setChecked(False)
+    qapp.processEvents()
+    window.checkBoxSignalSoc.setChecked(True)
+    qapp.processEvents()
+    assert window.checkBoxSignalSoh.isChecked()
+    assert window.checkBoxSignalSoc.isChecked()
+    assert len(window.plotWidgetOverlay.getPlotItem().listDataItems()) == 4
 
 
 # ---------------------------------------------------------------------------

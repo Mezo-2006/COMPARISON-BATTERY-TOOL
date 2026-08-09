@@ -92,7 +92,7 @@ All files live in `final_tool/`.
 | `alignment_engine.py` | ~355 | nearest + interpolate alignment | Done |
 | `statistics_engine.py` | ~352 | per-signal + global metrics | Done |
 | `comparison_worker.py` | ~230 | QThread orchestrator (offline) | Done |
-| `plot_manager.py` | ~213 | pyqtgraph 4-plot wrapper | Done |
+| `plot_manager.py` | ~330 | pyqtgraph overlay+error 2-plot wrapper | Done |
 | `export_engine.py` | ~463 | CSV/Excel/PDF/HTML export | Done |
 | `mqtt_worker.py` | ~188 | generic MQTT client | Done |
 | `live_schema.py` | ~400 | JSON payload parser + topic routing + id | Done |
@@ -102,7 +102,7 @@ All files live in `final_tool/`.
 Docs in `docs/` (per-module line-by-line explanations) and
 `high_lvl_explaination.md` (architecture overview).
 
-Tests in `tests/` — **146 pytest tests, all passing (~3s)**.
+Tests in `tests/` — **202 pytest tests, all passing (~5-8s)**.
 
 ---
 
@@ -113,10 +113,36 @@ Tests in `tests/` — **146 pytest tests, all passing (~3s)**.
 1. Load & Extract — file browse + Start Comparison
 2. Preview — twin + ECU QTableWidgets
 3. Statistics — 6 summary cards + per-signal + worst-mismatches tables
-4. Graphs/Overlay — 4 pyqtgraph PlotWidgets (V, I, T, error)
-5. Config/Tolerance — 3 tolerance spinboxes + alignment combo + signal checkboxes + Apply & Re-run
+4. Graphs/Overlay — 2 pyqtgraph PlotWidgets (overlay + error) + signal selection
+5. Config/Tolerance — 3 tolerance spinboxes + alignment combo + threshold warnings + Apply & Re-run
 6. Report/Export — CSV/Excel data + PDF/HTML report
 7. Live (MQTT) — broker config + topic roots + Auto-refresh + interval + Freeze/Snapshot
+
+### 4.1a Graphs/Overlay tab — signal selection (not per-signal plots)
+
+Redesigned from the original four fixed plots (V/I/T/error) to two:
+
+- `plotWidgetOverlay` — twin (dashed) vs ECU (solid) for every signal the
+  user ticks, all sharing one plot. Each signal keeps a stable colour
+  (see `plot_manager._SIGNAL_COLOURS`) across both twin/ECU curves and
+  the error plot.
+- `plotWidgetError` — one error curve (ECU − twin) per ticked signal.
+
+Selection lives entirely on the Graphs tab now, not the Config tab:
+`checkBoxSignalVoltage` / `Current` / `Temperature` / `Soc` / `Soh`
+(all five, independently), plus `checkBoxSignalSelectOnly` which forces
+radio-button behaviour on top of the plain checkboxes — ticking one
+signal while it's armed unchecks the rest, and arming it collapses
+whatever's currently ticked down to one. `back.py`'s
+`_force_single_signal_selection` implements this with `blockSignals`
+guards (see `on_signal_selection_changed` / `on_select_only_one_toggled`).
+SoC/SoH are **no longer force-included** on the error plot — what's
+ticked is what's drawn, on both plots identically.
+
+Threshold-warning highlighting (dashed limit line + red flood-fill,
+Config tab's `checkBoxEnableVoltageThreshold` / `Current`) still works
+per-signal on the shared overlay plot — `PlotManager._apply_threshold`
+is called once per enabled signal that has a configured threshold.
 
 ### 4.2 Tolerance spinboxes
 
@@ -192,22 +218,74 @@ watches whatever tab they're on.
 current buffers and stashes it as `self.aligned_data` /
 `self.stats_result` so the Export tab acts on the frozen state.
 
+### 5.7 Sliding live plot window (not auto-range)
+
+`PlotManager.update(..., live_window_ms=...)` — passed only from
+`_on_live_aligned` (`back.py._LIVE_PLOT_WINDOW_MS`, default 60 000 ms) —
+pins both Graphs-tab plots to `[latest_t - live_window_ms, latest_t]`
+via `setXRange(..., padding=0)` **every tick**, instead of leaving
+pyqtgraph's default auto-range in charge. Two bugs this fixes at once:
+
+- **"Compresses instead of shifting."** Auto-range re-fits *every*
+  accumulated sample on every redraw, so as the live buffer grows toward
+  its cap (`live_accumulator.DEFAULT_MAX_AGE_MS`, 10 minutes) the whole
+  history gets squeezed into the same view width instead of the view
+  scrolling forward at a constant width.
+- **"Graphs stop appearing after disconnect → reconnect."** pyqtgraph's
+  auto-range gets permanently disabled the moment a user manually
+  pans/zooms a plot, pinning it to that manual range. `reset` clears the
+  buffer on reconnect, so a stale manual range from before the disconnect
+  may no longer contain the fresh data at all — reading as "the graph
+  went blank." Calling `setXRange` unconditionally every tick overrides
+  any stuck manual range and snaps the view back onto live data.
+
+Offline runs and Freeze/Snapshot pass `live_window_ms=None` (the
+default) — they want the full accumulated range visible, not a scrolling
+window.
+
 ---
 
 ## 6. Payload schema (live mode)
+
+### 6.0 Timestamp unit — Unix epoch MILLISECONDS
+
+**`t` / `timestamp` is a real Unix epoch timestamp in milliseconds** —
+e.g. `1754748123456` for 2025-08-09T12:02:03.456Z (like JavaScript's
+`Date.now()`). It's a `double` on the wire (JSON has no int64). This is
+the single most important wire-format detail for anything that publishes
+into the Live tab — see `synthetic_data_generator.py`'s "Timestamp
+convention" module-docstring section for the full rationale, and the
+copy-pasteable spec in this repo's PR/chat history for handing to a
+publisher-side (Simulink/ECU) team.
+
+Every part of the live pipeline that compares raw timestamp deltas is
+scaled to this unit: `live_accumulator.DEFAULT_MAX_AGE_MS` (600 000 =
+10 minutes, buffer aging window) and `alignment_engine._MAX_DELTA_T_WARN_MS`
+(500 = half a second, nearest-match gap-warning threshold — cosmetic
+only, not fatal). **A publisher that sends seconds instead of
+milliseconds will not error, but will silently defeat the buffer's aging
+window and spam the gap-warning** — see `alignment_engine.py`'s
+`_MAX_DELTA_T_WARN_MS` comment for the (documented, accepted) offline/live
+unit-scale caveat this creates for CSV-sourced runs, which stay in
+whatever unit the CSV itself uses.
+
+Do NOT confuse this with offline CSV timestamps, which are unaffected —
+`data_loader`/`alignment_engine` are unit-agnostic and just use whatever
+scale the CSV file already has (this project's own fixtures are small,
+roughly-seconds-scale numbers).
 
 ### 6.1 JSON, two shapes
 
 **Single sample:**
 ```json
-{"t": 12.34, "v": 3.65, "i": -1.2, "temp": 28.1, "soc": 78.3, "soh": 99.0, "id": "s1"}
+{"t": 1754748123456, "v": 3.65, "i": -1.2, "temp": 28.1, "soc": 78.3, "soh": 99.0, "id": "s1"}
 ```
 
 **Batch:**
 ```json
 {"samples": [
-    {"t": 12.30, "v": 3.65, "i": -1.2, "temp": 28.0, "soc": 78.2, "soh": 99.0, "id": "a"},
-    {"t": 12.40, "v": 3.64, "i": -1.1, "temp": 28.1, "soc": 78.3, "soh": 99.0, "id": "b"}
+    {"t": 1754748123400, "v": 3.65, "i": -1.2, "temp": 28.0, "soc": 78.2, "soh": 99.0, "id": "a"},
+    {"t": 1754748123500, "v": 3.64, "i": -1.1, "temp": 28.1, "soc": 78.3, "soh": 99.0, "id": "b"}
 ]}
 ```
 
@@ -246,7 +324,10 @@ timestamp + other valid signals still get recorded).
 
 Two caps, either trips first:
 - `max_rows` (default 10 000) — keep N most recent rows per source.
-- `max_age_s` (default 600 s) — drop rows older than `newest_t - max_age_s`.
+- `max_age_ms` (default 600 000 ms = 10 minutes) — drop rows older than
+  `newest_t - max_age_ms`. Milliseconds, matching §6.0's wire convention
+  (renamed from `max_age_s` when the live pipeline switched to real Unix
+  epoch millis timestamps).
 
 Two `pd.DataFrame`s (twin, ecu) — NOT one combined DataFrame with a
 `source` column. This parallels the offline two-`LoadResult` contract.
@@ -275,7 +356,7 @@ a third load path, reuse `build_load_result`.
 
 ## 9. Testing conventions
 
-### 9.1 pytest, 146 tests, ~3s
+### 9.1 pytest, 202 tests, ~5-8s
 
 ```bash
 source ../venv/bin/activate
@@ -348,8 +429,9 @@ why the `id` dedup field exists.
 `_clear_legend` compat helper. If you upgrade pyqtgraph, check the
 legend API first.
 
-SoC / SoH are **always** added to the error plot when present (no
-checkbox for them) — this is a deliberate PlotManager rule.
+SoC / SoH are **not** force-included anymore (see §4.1a) — every signal,
+including SoC/SoH, only appears on either plot when its Graphs-tab
+checkbox is ticked.
 
 ---
 
@@ -408,7 +490,16 @@ Unless the user explicitly asks for them.
 13. **No comments in code** unless asked (per the repo's code style).
 14. **Never commit unless the user explicitly asks.**
 15. **Run `python -m pytest tests/ -q` before declaring a task done.**
-    All 146 tests must pass.
+    All 202 tests must pass.
+16. **Live-mode wire timestamps are Unix epoch MILLISECONDS.** See §6.0.
+    Every consumer that compares raw timestamp deltas
+    (`live_accumulator.DEFAULT_MAX_AGE_MS`,
+    `alignment_engine._MAX_DELTA_T_WARN_MS`, `back.py._LIVE_PLOT_WINDOW_MS`)
+    is scaled to milliseconds — if you add another one, scale it too.
+17. **Graphs-tab signal selection lives on the Graphs tab, not Config.**
+    See §4.1a. Don't reintroduce a Config-tab "signals to include"
+    control — that was removed as a UX bug (selection belonged next to
+    the plots it drives).
 
 ---
 
@@ -421,9 +512,19 @@ Unless the user explicitly asks for them.
   redesign). `high_lvl_explaination.md` is the current source of truth.
 - `theme_manager.py` is deferred (no dark/light toggle in the UI).
 - Export doesn't auto-append file extension.
-- Live mode has no built-in MQTT publisher demo for the new JSON schema
-  (the old `mqtt_worker_sender.py` / `mqtt_worker_receiver.py` demos
-  predate `live_schema`).
+- `mqtt_worker_sender.py` / `mqtt_worker_receiver.py` demos predate
+  `live_schema` (fixed ramp payloads, not the canonical JSON shape).
+  Prefer `synthetic_mqtt_publisher.py` (combined, single-process) or
+  `synthetic_mqtt_publisher_twin.py` + `synthetic_mqtt_publisher_ecu.py`
+  (two independent processes, same `--seed` to stay correlated — closer
+  to how the real Simulink/ECU sources will be wired up) for live-mode
+  testing against the current schema.
+- `alignment_engine._MAX_DELTA_T_WARN_MS`'s gap-warning threshold is
+  tuned for the live pipeline's millisecond timestamps (§6.0) but is
+  shared code with the offline CSV path, which stays in whatever unit
+  the CSV uses — cosmetic warning text only (not fatal), but a future
+  refactor could thread an explicit unit through `align()` if it becomes
+  a real pain point.
 
 ---
 

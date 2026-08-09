@@ -1,7 +1,7 @@
-"""Tests for ``plot_manager.py`` — the four pyqtgraph PlotWidgets.
+"""Tests for ``plot_manager.py`` — the two pyqtgraph PlotWidgets (overlay + error).
 
 These tests need a ``QApplication`` so the promoted ``PlotWidget``
-instances from ``f.py`` can be constructed.  They count ``listDataItems``
+instances from ``f.py`` can be constructed. They count ``listDataItems``
 to verify that the right number of curves were drawn (and no others).
 """
 
@@ -40,87 +40,74 @@ def _curves(plot_widget):
     return len(plot_widget.getPlotItem().listDataItems())
 
 
+def _make_pm(main_window, **kwargs):
+    return PlotManager(
+        main_window.plotWidgetOverlay,
+        main_window.plotWidgetError,
+        **kwargs,
+    )
+
+
 # ---------------------------------------------------------------------------
-# Update with all defaults
+# Update with all defaults — every signal enabled
 # ---------------------------------------------------------------------------
-def test_update_all_signals_draws_two_curves_per_overlay(main_window,
+def test_update_all_signals_draws_twin_and_ecu_per_signal(main_window,
                                                             twin_result_five,
                                                             ecu_result_five):
     aligned = align(twin_result_five, ecu_result_five, ALIGN_NEAREST)
-    pm = PlotManager(
-        main_window.plotWidgetVoltage,
-        main_window.plotWidgetCurrent,
-        main_window.plotWidgetTemperature,
-        main_window.plotWidgetError,
-    )
+    pm = _make_pm(main_window)
     pm.update(aligned)
 
-    assert _curves(main_window.plotWidgetVoltage) == 2      # twin + ECU
-    assert _curves(main_window.plotWidgetCurrent) == 2
-    assert _curves(main_window.plotWidgetTemperature) == 2
-    # Error plot: 5 signals (V/I/T/SoC/SoH — SoC/SoH always on error).
+    # 5 signals * (twin + ECU) = 10 curves on the shared overlay plot.
+    assert _curves(main_window.plotWidgetOverlay) == 10
+    # Error plot: one curve per signal.
     assert _curves(main_window.plotWidgetError) == 5
 
 
 # ---------------------------------------------------------------------------
 # Checkbox subset: only voltage is enabled
 # ---------------------------------------------------------------------------
-def test_enabled_subset_only_voltage_keeps_soc_soh_on_error(main_window,
-                                                              twin_result_five,
-                                                              ecu_result_five):
+def test_enabled_subset_only_voltage(main_window, twin_result_five, ecu_result_five):
     aligned = align(twin_result_five, ecu_result_five, ALIGN_NEAREST)
-    pm = PlotManager(
-        main_window.plotWidgetVoltage,
-        main_window.plotWidgetCurrent,
-        main_window.plotWidgetTemperature,
-        main_window.plotWidgetError,
-    )
+    pm = _make_pm(main_window)
     pm.update(aligned, enabled_signals={"voltage"})
 
-    assert _curves(main_window.plotWidgetVoltage) == 2  # voltage ticked
-    assert _curves(main_window.plotWidgetCurrent) == 0  # unticked
-    assert _curves(main_window.plotWidgetTemperature) == 0
-    # Error plot: V (ticked) + SoC + SoH (always on) = 3 curves.
-    assert _curves(main_window.plotWidgetError) == 3
+    assert _curves(main_window.plotWidgetOverlay) == 2  # twin + ECU
+    assert _curves(main_window.plotWidgetError) == 1
+
+
+def test_no_signals_enabled_draws_nothing(main_window, twin_result_five, ecu_result_five):
+    aligned = align(twin_result_five, ecu_result_five, ALIGN_NEAREST)
+    pm = _make_pm(main_window)
+    pm.update(aligned, enabled_signals=set())
+
+    assert _curves(main_window.plotWidgetOverlay) == 0
+    assert _curves(main_window.plotWidgetError) == 0
 
 
 # ---------------------------------------------------------------------------
 # clear_all empties every plot
 # ---------------------------------------------------------------------------
-def test_clear_all_empties_every_plot(main_window,
-                                        twin_result_five,
-                                        ecu_result_five):
+def test_clear_all_empties_every_plot(main_window, twin_result_five, ecu_result_five):
     aligned = align(twin_result_five, ecu_result_five, ALIGN_NEAREST)
-    pm = PlotManager(
-        main_window.plotWidgetVoltage,
-        main_window.plotWidgetCurrent,
-        main_window.plotWidgetTemperature,
-        main_window.plotWidgetError,
-    )
+    pm = _make_pm(main_window)
     pm.update(aligned)
     pm.clear_all()
 
-    assert _curves(main_window.plotWidgetVoltage) == 0
-    assert _curves(main_window.plotWidgetCurrent) == 0
-    assert _curves(main_window.plotWidgetTemperature) == 0
+    assert _curves(main_window.plotWidgetOverlay) == 0
     assert _curves(main_window.plotWidgetError) == 0
 
 
 # ---------------------------------------------------------------------------
-# Partial 3-signal ECU: error plot gets only V/I/T
+# Partial 3-signal ECU: only V/I/T can be drawn even if all 5 are ticked
 # ---------------------------------------------------------------------------
-def test_partial_three_signal_ecu_only_vit_on_error(main_window,
-                                                       twin_result_five,
-                                                       ecu_result_three):
+def test_partial_three_signal_ecu_only_vit(main_window, twin_result_five, ecu_result_three):
     aligned = align(twin_result_five, ecu_result_three, ALIGN_NEAREST)
-    pm = PlotManager(
-        main_window.plotWidgetVoltage,
-        main_window.plotWidgetCurrent,
-        main_window.plotWidgetTemperature,
-        main_window.plotWidgetError,
-    )
+    pm = _make_pm(main_window)
     pm.update(aligned)
-    assert _curves(main_window.plotWidgetError) == 3  # V/I/T only
+
+    assert _curves(main_window.plotWidgetOverlay) == 6  # V/I/T * 2
+    assert _curves(main_window.plotWidgetError) == 3    # V/I/T only
 
 
 # ---------------------------------------------------------------------------
@@ -135,17 +122,11 @@ def test_threshold_exceeded_adds_flood_curve_and_warning_label(
                              [3.30, 3.31, 3.42, 3.55])},
     )
     label = QtWidgets.QLabel()
-    pm = PlotManager(
-        main_window.plotWidgetVoltage,
-        main_window.plotWidgetCurrent,
-        main_window.plotWidgetTemperature,
-        main_window.plotWidgetError,
-        warning_labels={"voltage": label},
-    )
+    pm = _make_pm(main_window, warning_labels={"voltage": label})
     pm.update(aligned, thresholds={"voltage": (True, 3.4)})
 
     # twin + ECU + the red "over limit" flood curve.
-    assert _curves(main_window.plotWidgetVoltage) == 3
+    assert _curves(main_window.plotWidgetOverlay) == 3
     assert "3.4" in label.text()
     assert "0.3" in label.text()  # worst breach is the last sample
 
@@ -156,16 +137,10 @@ def test_threshold_disabled_draws_no_flood_curve(main_window, make_aligned_data)
         signals={"voltage": ([3.30, 3.31], [3.30, 3.55])},
     )
     label = QtWidgets.QLabel()
-    pm = PlotManager(
-        main_window.plotWidgetVoltage,
-        main_window.plotWidgetCurrent,
-        main_window.plotWidgetTemperature,
-        main_window.plotWidgetError,
-        warning_labels={"voltage": label},
-    )
+    pm = _make_pm(main_window, warning_labels={"voltage": label})
     pm.update(aligned, thresholds={"voltage": (False, 3.4)})
 
-    assert _curves(main_window.plotWidgetVoltage) == 2  # no flood curve
+    assert _curves(main_window.plotWidgetOverlay) == 2  # no flood curve
     assert label.text() == ""
 
 
@@ -175,14 +150,56 @@ def test_threshold_never_exceeded_keeps_label_empty(main_window, make_aligned_da
         signals={"voltage": ([3.30, 3.31], [3.30, 3.31])},
     )
     label = QtWidgets.QLabel()
-    pm = PlotManager(
-        main_window.plotWidgetVoltage,
-        main_window.plotWidgetCurrent,
-        main_window.plotWidgetTemperature,
-        main_window.plotWidgetError,
-        warning_labels={"voltage": label},
-    )
+    pm = _make_pm(main_window, warning_labels={"voltage": label})
     pm.update(aligned, thresholds={"voltage": (True, 4.2)})
 
-    assert _curves(main_window.plotWidgetVoltage) == 2  # no breach, no flood
+    assert _curves(main_window.plotWidgetOverlay) == 2  # no breach, no flood
     assert label.text() == ""
+
+
+def test_threshold_label_cleared_when_signal_no_longer_enabled(
+    main_window, make_aligned_data,
+):
+    """A stale warning shouldn't linger once its signal is unticked."""
+    aligned = make_aligned_data(
+        timestamps=[0.0, 0.1],
+        signals={"voltage": ([3.30, 3.31], [3.30, 3.55])},
+    )
+    label = QtWidgets.QLabel()
+    pm = _make_pm(main_window, warning_labels={"voltage": label})
+    pm.update(aligned, enabled_signals={"voltage"}, thresholds={"voltage": (True, 3.4)})
+    assert label.text() != ""
+
+    pm.update(aligned, enabled_signals=set(), thresholds={"voltage": (True, 3.4)})
+    assert label.text() == ""
+
+
+# ---------------------------------------------------------------------------
+# Live sliding window
+# ---------------------------------------------------------------------------
+def test_live_window_pins_x_range_to_latest_samples(main_window, make_aligned_data):
+    aligned = make_aligned_data(
+        timestamps=[0.0, 10.0, 100.0],
+        signals={"voltage": ([3.3, 3.3, 3.3], [3.3, 3.3, 3.3])},
+    )
+    pm = _make_pm(main_window)
+    pm.update(aligned, live_window_ms=30.0)
+
+    (x_min, x_max), _ = main_window.plotWidgetOverlay.getPlotItem().viewRange()
+    assert x_max == pytest.approx(100.0)
+    assert x_min == pytest.approx(70.0)
+
+
+def test_no_live_window_leaves_default_autorange(main_window, make_aligned_data):
+    """Offline calls (live_window_ms=None) shouldn't pin a live sliding window."""
+    aligned = make_aligned_data(
+        timestamps=[0.0, 10.0, 100.0],
+        signals={"voltage": ([3.3, 3.3, 3.3], [3.3, 3.3, 3.3])},
+    )
+    pm = _make_pm(main_window)
+    pm.update(aligned)  # live_window_ms defaults to None
+
+    (x_min, x_max), _ = main_window.plotWidgetOverlay.getPlotItem().viewRange()
+    # Not pinned to a 30s-wide slice at the end of the series -- whatever
+    # pyqtgraph's own auto-range picked is fine, we just didn't override it.
+    assert not (x_min == pytest.approx(70.0) and x_max == pytest.approx(100.0))

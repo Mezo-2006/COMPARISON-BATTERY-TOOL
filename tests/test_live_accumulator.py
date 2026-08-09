@@ -116,7 +116,7 @@ class TestBuildResults:
 # ---------------------------------------------------------------------------
 class TestTrimming:
     def test_row_cap_drops_oldest(self):
-        buf = LiveBuffer(max_rows=3, max_age_s=10_000)
+        buf = LiveBuffer(max_rows=3, max_age_ms=10_000)
         for i in range(5):
             buf.add_sample(_twin_sample(float(i)))
         assert buf.twin_count == 3
@@ -128,7 +128,7 @@ class TestTrimming:
         assert list(twin_lr.df["timestamp"]) == [2.0, 3.0, 4.0]
 
     def test_age_cap_drops_old_rows(self):
-        buf = LiveBuffer(max_rows=10_000, max_age_s=2.0)
+        buf = LiveBuffer(max_rows=10_000, max_age_ms=2.0)
         buf.add_sample(_twin_sample(0.0))
         buf.add_sample(_twin_sample(1.0))
         buf.add_sample(_twin_sample(10.0))  # newest — cutoff becomes 8.0

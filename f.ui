@@ -595,75 +595,133 @@ QLabel#labelMaxErrorValue, QLabel#labelRMSEValue, QLabel#labelMatchPercentageVal
        </attribute>
        <layout class="QVBoxLayout" name="verticalLayoutGraphs">
         <item>
+         <widget class="QGroupBox" name="groupBoxSignalSelection">
+          <property name="title">
+           <string>Signals to Plot</string>
+          </property>
+          <layout class="QHBoxLayout" name="horizontalLayoutSignalSelection">
+           <item>
+            <widget class="QCheckBox" name="checkBoxSignalVoltage">
+             <property name="text">
+              <string>Voltage</string>
+             </property>
+             <property name="checked">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QCheckBox" name="checkBoxSignalCurrent">
+             <property name="text">
+              <string>Current</string>
+             </property>
+             <property name="checked">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QCheckBox" name="checkBoxSignalTemperature">
+             <property name="text">
+              <string>Temperature</string>
+             </property>
+             <property name="checked">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QCheckBox" name="checkBoxSignalSoc">
+             <property name="text">
+              <string>SoC</string>
+             </property>
+             <property name="checked">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <widget class="QCheckBox" name="checkBoxSignalSoh">
+             <property name="text">
+              <string>SoH</string>
+             </property>
+             <property name="checked">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <spacer name="horizontalSpacerSignalSelection">
+             <property name="orientation">
+              <enum>Qt::Horizontal</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>20</width>
+               <height>20</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+           <item>
+            <widget class="QCheckBox" name="checkBoxSignalSelectOnly">
+             <property name="text">
+              <string>Select only one</string>
+             </property>
+             <property name="checked">
+              <bool>false</bool>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
          <widget class="QSplitter" name="splitterGraphs">
           <property name="orientation">
            <enum>Qt::Vertical</enum>
           </property>
-          <widget class="QWidget" name="widgetVoltagePlotContainer">
-           <layout class="QVBoxLayout" name="verticalLayoutVoltagePlot">
+          <widget class="QWidget" name="widgetOverlayPlotContainer">
+           <layout class="QVBoxLayout" name="verticalLayoutOverlayPlot">
             <item>
-             <widget class="QLabel" name="labelVoltagePlotTitle">
+             <widget class="QLabel" name="labelOverlayPlotTitle">
               <property name="text">
-               <string>Voltage — Digital Twin vs ECU</string>
+               <string>Selected Signals — Digital Twin vs ECU</string>
               </property>
              </widget>
             </item>
             <item>
-             <widget class="QLabel" name="labelVoltageWarning">
-              <property name="styleSheet">
-               <string>color: #d32f2f; font-weight: bold;</string>
-              </property>
-              <property name="text">
-               <string/>
-              </property>
-              <property name="wordWrap">
-               <bool>true</bool>
-              </property>
-             </widget>
+             <layout class="QHBoxLayout" name="horizontalLayoutOverlayWarnings">
+              <item>
+               <widget class="QLabel" name="labelVoltageWarning">
+                <property name="styleSheet">
+                 <string>color: #d32f2f; font-weight: bold;</string>
+                </property>
+                <property name="text">
+                 <string/>
+                </property>
+                <property name="wordWrap">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel" name="labelCurrentWarning">
+                <property name="styleSheet">
+                 <string>color: #d32f2f; font-weight: bold;</string>
+                </property>
+                <property name="text">
+                 <string/>
+                </property>
+                <property name="wordWrap">
+                 <bool>true</bool>
+                </property>
+               </widget>
+              </item>
+             </layout>
             </item>
             <item>
-             <widget class="PlotWidget" name="plotWidgetVoltage" native="true"/>
-            </item>
-           </layout>
-          </widget>
-          <widget class="QWidget" name="widgetCurrentPlotContainer">
-           <layout class="QVBoxLayout" name="verticalLayoutCurrentPlot">
-            <item>
-             <widget class="QLabel" name="labelCurrentPlotTitle">
-              <property name="text">
-               <string>Current — Digital Twin vs ECU</string>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="QLabel" name="labelCurrentWarning">
-              <property name="styleSheet">
-               <string>color: #d32f2f; font-weight: bold;</string>
-              </property>
-              <property name="text">
-               <string/>
-              </property>
-              <property name="wordWrap">
-               <bool>true</bool>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="PlotWidget" name="plotWidgetCurrent" native="true"/>
-            </item>
-           </layout>
-          </widget>
-          <widget class="QWidget" name="widgetTemperaturePlotContainer">
-           <layout class="QVBoxLayout" name="verticalLayoutTemperaturePlot">
-            <item>
-             <widget class="QLabel" name="labelTemperaturePlotTitle">
-              <property name="text">
-               <string>Temperature — Digital Twin vs ECU</string>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="PlotWidget" name="plotWidgetTemperature" native="true"/>
+             <widget class="PlotWidget" name="plotWidgetOverlay" native="true"/>
             </item>
            </layout>
           </widget>
@@ -775,45 +833,6 @@ QLabel#labelMaxErrorValue, QLabel#labelRMSEValue, QLabel#labelMatchPercentageVal
                <double>2.000000000000000</double>
               </property>
              </widget>
-           </item>
-          </layout>
-         </widget>
-        </item>
-        <item>
-         <widget class="QGroupBox" name="groupBoxSignalsToggle">
-          <property name="title">
-           <string>Signals to Include</string>
-          </property>
-          <layout class="QHBoxLayout" name="horizontalLayoutSignalsToggle">
-           <item>
-            <widget class="QCheckBox" name="checkBoxIncludeVoltage">
-             <property name="text">
-              <string>Voltage</string>
-             </property>
-             <property name="checked">
-              <bool>true</bool>
-             </property>
-            </widget>
-           </item>
-           <item>
-            <widget class="QCheckBox" name="checkBoxIncludeCurrent">
-             <property name="text">
-              <string>Current</string>
-             </property>
-             <property name="checked">
-              <bool>true</bool>
-             </property>
-            </widget>
-           </item>
-           <item>
-            <widget class="QCheckBox" name="checkBoxIncludeTemperature">
-             <property name="text">
-              <string>Temperature</string>
-             </property>
-             <property name="checked">
-              <bool>true</bool>
-             </property>
-            </widget>
            </item>
           </layout>
          </widget>

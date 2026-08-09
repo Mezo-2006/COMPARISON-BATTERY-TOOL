@@ -35,12 +35,56 @@ Signal ranges and the twin/ecu offset convention (ecu timestamped
 ``ecu_time_offset`` seconds after twin, ecu ~= twin + a small delta) match
 the project's own test fixtures (``test_twin.csv`` / ``test_ecu.csv`` and
 ``tests/conftest.py``'s ``twin_result_five`` / ``ecu_result_five``).
+
+Timestamp convention — real Unix time, in MILLISECONDS
+--------------------------------------------------------
+**Wire contract:** every sample's ``timestamp`` field is a real Unix
+timestamp expressed in **milliseconds** since the epoch (1970-01-01
+00:00:00 UTC) — e.g. ``1754748123456`` for 2025-08-09T12:02:03.456Z
+(compare to JavaScript's ``Date.now()`` or Java's
+``System.currentTimeMillis()``). It is a ``double``/float on the wire
+(JSON has no int64), matching the ``double time`` parameter in the
+``variablesToJSON(double time, double voltage, double current, double
+soc, double soh)`` signature the ECU/Simulink side builds its payload
+with, and the ``double`` returned by ``getTime()`` after parsing one
+back with ``JSONtoVariables()``. On the C/embedded side this is
+``real_unix_millis = (double)time(NULL) * 1000.0 + sub_second_ms`` (or
+an RTC/NTP-synced clock) — **not** ``time(NULL)`` alone (that's seconds)
+and **not** a free-running tick counter from process start.
+
+**Why milliseconds:** matches common wire/telemetry convention (JS
+``Date.now()``, most JSON telemetry/log formats) and gives integer-ish
+timestamps with no ambiguity about how many sub-second digits are
+significant. Every part of the live pipeline that compares raw
+timestamp deltas is scaled to match this unit:
+``live_accumulator.DEFAULT_MAX_AGE_MS`` (buffer aging window, 600 000 =
+10 minutes) and ``alignment_engine._MAX_DELTA_T_WARN_MS`` (the
+nearest-match gap-warning threshold, 500 = half a second). **A real
+ECU/Simulink publisher must also emit milliseconds** — sending seconds
+(~1.7e9, 1000x smaller) would make the buffer's 10-minute aging window
+trip after 10 000 real seconds (~2.8 hours) instead of 10 minutes, and
+would make the alignment gap-warning fire on almost every sample.
+
+**Why real time, not a simulation-relative counter:** earlier versions
+of this generator started its internal clock at ``t = 0.0`` and just
+incremented it by ``dt`` per sample — a timestamp with no relationship
+to the wall clock. That doesn't exercise the tool the way a real
+publisher would (a real ECU/Simulink sender stamps each sample with
+*when it was actually measured*), so this generator instead seeds its
+clock from ``time.time() * 1000`` at construction and still advances it
+by ``dt`` (converted to ms) per synthetic sample (see
+:meth:`SyntheticBatteryGenerator.step`) — every timestamp it emits is a
+genuine, real, present-day Unix time in milliseconds, not an offset from
+zero. **A real ECU/Simulink publisher should do the same:** stamp
+``time`` with the actual real-world instant the sample was measured (in
+ms), not a simulation tick counted from process start.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
+import time as _time
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 
@@ -56,7 +100,17 @@ class GeneratorConfig:
 
     seed: int = 42
     dt: float = 0.1                       # seconds between twin samples
-    ecu_time_offset: float = 0.05         # ECU sample offset from twin
+    ecu_time_offset: float = 0.05         # ECU sample offset from twin, seconds
+    start_time: float | None = None       # Unix EPOCH MILLISECONDS; None ->
+                                           # time.time()*1000 at construction
+                                           # (real wall clock). Pin an explicit
+                                           # value only when a test needs
+                                           # byte-identical output across two
+                                           # generator instances. dt /
+                                           # ecu_time_offset stay in seconds
+                                           # for readability (drift rates are
+                                           # "per second") and are converted
+                                           # to ms internally -- see step().
 
     # Starting state (matches the project's CSV fixtures).
     start_voltage: float = 3.30           # V
@@ -114,7 +168,15 @@ class SyntheticBatteryGenerator:
         self.rng_divergence = np.random.default_rng(s_divergence)
         self.rng_trajectory = np.random.default_rng(s_trajectory)
 
-        self._t = 0.0
+        # Seed the internal clock from the real wall clock (real Unix
+        # epoch MILLISECONDS) rather than 0.0 — see the module docstring's
+        # "Timestamp convention" section. Still advances by ``dt`` (in ms,
+        # see step()) per sample, so per-sample spacing within/across
+        # batches stays deterministic even though the anchor is real.
+        # ``start_time`` lets a test pin the anchor for byte-identical-
+        # output comparisons.
+        self._t = (self.cfg.start_time if self.cfg.start_time is not None
+                   else _time.time() * 1000.0)
         self._seq = 0
         self._true = {
             "voltage": self.cfg.start_voltage,
@@ -168,12 +230,15 @@ class SyntheticBatteryGenerator:
             ecu[name] = self._clamp(name, true_now[name] + ecu_sensor_draw + gap)
 
         self._seq += 1
-        twin["timestamp"] = round(self._t, 6)
+        # Wire timestamp is Unix epoch MILLISECONDS (self._t); dt and
+        # ecu_time_offset are authored in seconds for readability
+        # (matches the per-second drift rates above), so convert here.
+        twin["timestamp"] = round(self._t, 3)
         twin["id"] = self._seq
-        ecu["timestamp"] = round(self._t + cfg.ecu_time_offset, 6)
+        ecu["timestamp"] = round(self._t + cfg.ecu_time_offset * 1000.0, 3)
         ecu["id"] = self._seq
 
-        self._t += dt
+        self._t += dt * 1000.0
         return twin, ecu
 
     def batch(self, n: int) -> Tuple[dict, dict]:

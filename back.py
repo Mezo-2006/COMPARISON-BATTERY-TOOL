@@ -81,6 +81,21 @@ from event_window import EventWindow
 _MAX_PREVIEW_ROWS = 100
 _FLOAT_FMT = "{:.4f}"
 
+# Live-mode Graphs tab: width, in milliseconds (the live pipeline's wire
+# timestamp unit -- see synthetic_data_generator's "Timestamp convention"
+# section), of the sliding X-range window kept on screen. Passed to
+# PlotManager.update(..., live_window_ms=...) only from the live re-align
+# tick (_on_live_aligned) -- offline runs and live Freeze/Snapshot show the
+# full accumulated range instead, matching a one-shot comparison rather
+# than a scrolling stream. See PlotManager.update and _apply_live_window
+# for why this must be pinned every tick rather than left to pyqtgraph's
+# default auto-range: without it, a live plot's view either "compresses"
+# (auto-fits the whole, ever-growing buffer instead of scrolling) or can
+# get stuck on a stale manual pan/zoom range that no longer contains the
+# fresh data after a disconnect + reconnect (the buffer is reset on
+# reconnect), which reads as "the graphs stopped appearing".
+_LIVE_PLOT_WINDOW_MS = 60_000.0
+
 
 def _populate_preview_table(
     table: QtWidgets.QTableWidget,
@@ -225,15 +240,29 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
 
         # --- Plot manager -------------------------------------------------
         self.plot_manager = PlotManager(
-            self.plotWidgetVoltage,
-            self.plotWidgetCurrent,
-            self.plotWidgetTemperature,
+            self.plotWidgetOverlay,
             self.plotWidgetError,
             warning_labels={
                 "voltage": self.labelVoltageWarning,
                 "current": self.labelCurrentWarning,
             },
         )
+        # Signal checkboxes on the Graphs tab, in a fixed order used by
+        # both the "select only one" enforcement and _enabled_signals_set.
+        self._signal_checkboxes = (
+            self.checkBoxSignalVoltage,
+            self.checkBoxSignalCurrent,
+            self.checkBoxSignalTemperature,
+            self.checkBoxSignalSoc,
+            self.checkBoxSignalSoh,
+        )
+        self._signal_checkbox_names = {
+            self.checkBoxSignalVoltage: "voltage",
+            self.checkBoxSignalCurrent: "current",
+            self.checkBoxSignalTemperature: "temperature",
+            self.checkBoxSignalSoc: "soc",
+            self.checkBoxSignalSoh: "soh",
+        }
 
         # --- MQTT worker (Live tab) ---------------------------------------
         self.mqtt_thread: Optional[QtCore.QThread] = None
@@ -276,12 +305,15 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         self.btnBrowseEcu.clicked.connect(self.on_browse_ecu)
         self.btnStartComparison.clicked.connect(self.on_start_comparison)
 
-        # Tab 5: Config re-run + checkbox re-render
+        # Tab 5: Config re-run
         self.btnApplyRerun.clicked.connect(self.on_apply_rerun)
-        for cb in (self.checkBoxIncludeVoltage,
-                   self.checkBoxIncludeCurrent,
-                   self.checkBoxIncludeTemperature):
-            cb.stateChanged.connect(self.on_signal_checkbox_changed)
+
+        # Tab 4: Graphs — signal-selection checkboxes + "select only one"
+        for cb in self._signal_checkboxes:
+            cb.toggled.connect(self.on_signal_selection_changed)
+        self.checkBoxSignalSelectOnly.toggled.connect(
+            self.on_select_only_one_toggled
+        )
 
         # Tab 5: Threshold warnings — enable checkbox toggles its spinbox
         # and both re-render the plots (no realignment needed).
@@ -595,6 +627,54 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
                                  self._enabled_signals_set(),
                                  self._read_threshold_settings())
 
+    def on_signal_selection_changed(self, checked: bool) -> None:
+        """A Graphs-tab signal checkbox changed.
+
+        If "select only one" is armed, ticking a signal forces every
+        other signal checkbox off (radio-button behaviour built on plain
+        ``QCheckBox`` widgets, so the "Signals to Plot" row can stay a
+        single flat layout rather than switching widget types).
+        """
+        sender = self.sender()
+        if (checked and self.checkBoxSignalSelectOnly.isChecked()
+                and sender in self._signal_checkbox_names):
+            self._force_single_signal_selection(sender)
+        self.on_signal_checkbox_changed()
+
+    def on_select_only_one_toggled(self, checked: bool) -> None:
+        """Arming "select only one" immediately collapses to a single signal.
+
+        Keeps whichever signal was already checked (the first one, in
+        Voltage/Current/Temperature/SoC/SoH order, if more than one was
+        ticked); if none was ticked, defaults to Voltage so the overlay
+        plot isn't left empty.
+        """
+        if checked:
+            already_checked = [cb for cb in self._signal_checkboxes
+                                if cb.isChecked()]
+            keep = already_checked[0] if already_checked else self._signal_checkboxes[0]
+            self._force_single_signal_selection(keep)
+        self.on_signal_checkbox_changed()
+
+    def _force_single_signal_selection(self, keep: QtWidgets.QCheckBox) -> None:
+        """Uncheck every signal checkbox except ``keep`` (checking it if needed).
+
+        Uses ``blockSignals`` while flipping the *other* checkboxes so
+        this doesn't recursively re-enter ``on_signal_selection_changed``
+        for each one — the caller re-renders the plots itself once,
+        after the selection has settled.
+        """
+        for cb in self._signal_checkboxes:
+            if cb is keep or not cb.isChecked():
+                continue
+            cb.blockSignals(True)
+            cb.setChecked(False)
+            cb.blockSignals(False)
+        if not keep.isChecked():
+            keep.blockSignals(True)
+            keep.setChecked(True)
+            keep.blockSignals(False)
+
     def _read_threshold_settings(self) -> dict:
         """Read the Config tab's threshold-warning widgets.
 
@@ -624,16 +704,14 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         return method, tolerances
 
     def _enabled_signals_set(self) -> set:
-        out = set()
-        if self.checkBoxIncludeVoltage.isChecked():
-            out.add("voltage")
-        if self.checkBoxIncludeCurrent.isChecked():
-            out.add("current")
-        if self.checkBoxIncludeTemperature.isChecked():
-            out.add("temperature")
-        # SoC / SoH are always plotted on the error plot when present
-        # (PlotManager adds them automatically).
-        return out
+        """Signals ticked on the Graphs tab's "Signals to Plot" row.
+
+        Drives both plots (overlay + error) identically — unlike the old
+        four-plot layout, SoC/SoH are no longer force-included; what's
+        ticked is what's drawn.
+        """
+        return {name for cb, name in self._signal_checkbox_names.items()
+                if cb.isChecked()}
 
     # ------------------------------------------------------------------
     # Tab 6 — Export
@@ -845,9 +923,13 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
                     f"({ecu_lr.time_range[0]:.2f}-"
                     f"{ecu_lr.time_range[1]:.2f} s)"
                 )
-        # Re-render plots with the currently-enabled signal set.
+        # Re-render plots with the currently-enabled signal set. Pin the
+        # sliding live window so the view shifts with new data instead of
+        # compressing to fit the whole growing buffer (see
+        # _LIVE_PLOT_WINDOW_S).
         self.plot_manager.update(aligned, self._enabled_signals_set(),
-                                 self._read_threshold_settings())
+                                 self._read_threshold_settings(),
+                                 live_window_ms=_LIVE_PLOT_WINDOW_MS)
         # Feed only the newly-arrived rows through the (persistent) live
         # event detector.
         self._run_live_event_detection(aligned)

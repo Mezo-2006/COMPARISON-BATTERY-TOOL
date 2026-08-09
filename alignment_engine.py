@@ -55,10 +55,22 @@ ALIGN_INTERPOLATE = "interpolate"
 _SIGNAL_COLUMNS = ["voltage", "current", "temperature", "soc", "soh"]
 
 # If the largest timestamp gap between an ECU sample and its matched twin
-# sample exceeds this threshold (in seconds), a warning is emitted so the
-# user knows the alignment may be unreliable.  Half a second is a
-# conservative default for 10 Hz sampling.
-_MAX_DELTA_T_WARN_S = 0.5
+# sample exceeds this threshold, a warning is emitted so the user knows the
+# alignment may be unreliable. Half a second (500 ms) is a conservative
+# default for 10 Hz sampling.
+#
+# Unit caveat: this engine is unit-agnostic on paper (it just compares
+# float timestamps), but this *specific* constant is tuned for the live
+# pipeline's wire convention — Unix-epoch **milliseconds** (see
+# ``synthetic_data_generator``'s "Timestamp convention" section and
+# ``live_accumulator.DEFAULT_MAX_AGE_MS``). Offline CSV timestamps are
+# whatever unit the file itself uses (this project's own fixtures are
+# small, roughly-seconds-scale numbers), so this warning can under- or
+# over-fire on a CSV run — it's cosmetic (appended to ``warnings``, never
+# fatal), not a correctness issue for the alignment math itself. A future
+# refactor could thread an explicit unit through ``align()`` if this
+# becomes a real pain point.
+_MAX_DELTA_T_WARN_MS = 500.0
 
 
 # ---------------------------------------------------------------------------
@@ -226,10 +238,11 @@ def align(
         n_matched = 0
 
     # --- Warnings ----------------------------------------------------------
-    if max_delta_t > _MAX_DELTA_T_WARN_S:
+    if max_delta_t > _MAX_DELTA_T_WARN_MS:
         warnings.append(
             f"Largest timestamp gap between ECU and matched twin sample "
-            f"is {max_delta_t:.3f} s (> {_MAX_DELTA_T_WARN_S} s threshold). "
+            f"is {max_delta_t:.3f} (> {_MAX_DELTA_T_WARN_MS} threshold, "
+            f"assuming millisecond-scale live timestamps). "
             f"Alignment may be unreliable — consider a finer sample period."
         )
 

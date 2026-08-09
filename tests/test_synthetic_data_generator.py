@@ -29,8 +29,13 @@ ECU_ROOT = "bms/actual/#"
 # ---------------------------------------------------------------------------
 class TestDeterminism:
     def test_same_seed_produces_identical_batches(self):
-        gen_a = SyntheticBatteryGenerator(GeneratorConfig(seed=7))
-        gen_b = SyntheticBatteryGenerator(GeneratorConfig(seed=7))
+        # Pin start_time so both instances share the same real-time anchor
+        # -- without it, two back-to-back time.time() calls could differ by
+        # a fraction of a microsecond and break exact equality below. See
+        # GeneratorConfig.start_time / the module docstring's "Timestamp
+        # convention" section.
+        gen_a = SyntheticBatteryGenerator(GeneratorConfig(seed=7, start_time=1_700_000_000_000.0))
+        gen_b = SyntheticBatteryGenerator(GeneratorConfig(seed=7, start_time=1_700_000_000_000.0))
 
         twin_a, ecu_a = gen_a.batch(20)
         twin_b, ecu_b = gen_b.batch(20)
@@ -39,13 +44,26 @@ class TestDeterminism:
         assert ecu_a == ecu_b
 
     def test_same_seed_produces_identical_json_bytes(self):
-        gen_a = SyntheticBatteryGenerator(GeneratorConfig(seed=123))
-        gen_b = SyntheticBatteryGenerator(GeneratorConfig(seed=123))
+        gen_a = SyntheticBatteryGenerator(GeneratorConfig(seed=123, start_time=1_700_000_000_000.0))
+        gen_b = SyntheticBatteryGenerator(GeneratorConfig(seed=123, start_time=1_700_000_000_000.0))
 
         twin_a, _ = gen_a.batch(10)
         twin_b, _ = gen_b.batch(10)
 
         assert batch_to_json_bytes(twin_a) == batch_to_json_bytes(twin_b)
+
+    def test_default_start_time_is_real_wall_clock_millis(self):
+        """Without an explicit start_time, timestamps anchor to time.time()*1000."""
+        import time as _time
+        before = _time.time() * 1000.0
+        gen = SyntheticBatteryGenerator(GeneratorConfig(seed=1))
+        after = _time.time() * 1000.0
+
+        twin_payload, _ = gen.batch(1)
+        ts = twin_payload["samples"][0]["timestamp"]
+        # Real Unix epoch milliseconds, not a simulation-relative counter
+        # starting at 0 -- and not seconds-scale either (~1e9, not ~1e12).
+        assert before <= ts <= after + 1000.0
 
     def test_different_seeds_diverge(self):
         gen_a = SyntheticBatteryGenerator(GeneratorConfig(seed=1))

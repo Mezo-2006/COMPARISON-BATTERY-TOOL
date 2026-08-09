@@ -27,7 +27,7 @@ from mqtt_worker import MqttWorker
 # ──────────────────────────────────────────────────────────────────────
 #  Configuration — edit these values to match your broker / topic.
 # ──────────────────────────────────────────────────────────────────────
-HOST = "10.212.239.59"
+HOST = "192.168.4.2"
 PORT = 1883
 USERNAME = ""            # leave empty for anonymous broker access
 PASSWORD = ""

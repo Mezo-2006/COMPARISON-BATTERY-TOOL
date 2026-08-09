@@ -1,23 +1,29 @@
 """Plot manager for the Digital Twin Validation Tool.
 
-Wraps the four promoted ``pyqtgraph.PlotWidget`` instances on the Graphs
+Wraps the two promoted ``pyqtgraph.PlotWidget`` instances on the Graphs
 tab and redraws them from an :class:`AlignedData`:
 
-- ``plotWidgetVoltage``     — twin voltage vs ECU voltage (two overlaid curves)
-- ``plotWidgetCurrent``     — twin current vs ECU current
-- ``plotWidgetTemperature`` — twin temperature vs ECU temperature
-- ``plotWidgetError``       — error over time (ECU − twin), one curve per enabled signal
+- ``plotWidgetOverlay`` — actual (ECU) vs Digital Twin, one pair of
+  curves (twin dashed, ECU solid, both in the signal's colour) per
+  signal the user has ticked on the Graphs tab's signal-selection row.
+  Any subset of the five signals (voltage, current, temperature, SoC,
+  SoH) may be overlaid together.
+- ``plotWidgetError``   — error over time (ECU minus twin), one curve
+  per ticked signal — the same set that's on the overlay plot, just the
+  single error quantity instead of the twin/ECU pair.
 
-Signal-inclusion is controlled by the Config tab's checkboxes
-(``checkBoxIncludeVoltage`` / ``Current`` / ``Temperature``).  SoC and
-SoH have no dedicated overlay widget and no checkbox — they always
-appear on the error plot when present in the aligned data, so the user
-can still see their drift even though they aren't on the V/I/T tabs.
+Which signals are enabled is controlled entirely by the Graphs tab's own
+checkboxes (``checkBoxSignalVoltage`` / ``Current`` / ``Temperature`` /
+``Soc`` / ``Soh``, plus ``checkBoxSignalSelectOnly`` which constrains the
+above to a single choice) — ``back.py`` reads them into a plain
+``set[str]`` and passes it to :meth:`PlotManager.update`. Unlike the
+previous four-plot layout, SoC/SoH are no longer force-included: what you
+tick is what you get on both plots.
 
 Unlike the three pure-Python engines, this module **imports Qt and
-pyqtgraph** — it directly manipulates the plot widgets.  It is instantiated
+pyqtgraph** — it directly manipulates the plot widgets. It is instantiated
 by ``back.py`` after ``ComparisonWorker.finished`` delivers an
-``AlignedData`` and re-invoked whenever the Config tab's enabled-signal
+``AlignedData`` and re-invoked whenever the Graphs tab's signal-selection
 checkboxes change.
 """
 
@@ -37,25 +43,22 @@ pg.setConfigOptions(antialias=True)
 
 
 # ---------------------------------------------------------------------------
-# Colour palette for the error plot (one curve per signal)
+# Colour palette — one colour per signal, shared by the overlay plot (twin
+# dashed / ECU solid, same colour) and the error plot (one solid curve).
+# Fixed mapping so a signal keeps the same colour across runs and between
+# the two plots, with a cycle fallback for any unexpected signal name.
 # ---------------------------------------------------------------------------
-# pyqtgraph accepts colours as (R, G, B) tuples, hex strings, or names.  We
-# use a fixed mapping so the same signal always gets the same colour across
-# runs, with a cycle fallback for any unexpected signal names.
-_ERROR_COLOURS: dict = {
+_SIGNAL_ORDER = ["voltage", "current", "temperature", "soc", "soh"]
+
+_SIGNAL_COLOURS: dict = {
     "voltage":     "#e41a1c",   # red
     "current":     "#377eb8",   # blue
     "temperature": "#4daf4a",   # green
     "soc":         "#984ea3",   # purple
     "soh":         "#ff7f00",   # orange
 }
-_ERROR_COLOUR_CYCLE = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3",
-                       "#ff7f00", "#a65628", "#f781bf", "#999999"]
-
-# Twin vs ECU overlay colours (twin faint, ECU bold).  Same for every overlay
-# plot so the user learns a single visual convention.
-_TWIN_COLOUR = (100, 149, 237)   # cornflower blue — the model is the "reference"
-_ECU_COLOUR  = (20, 20, 20)      # near-black — ground truth
+_SIGNAL_COLOUR_CYCLE = ["#e41a1c", "#377eb8", "#4daf4a", "#984ea3",
+                        "#ff7f00", "#a65628", "#f781bf", "#999999"]
 
 # Threshold-warning styling: dashed limit line, a bold red "flood" for the
 # samples that cross it, and a translucent fill so the overrun is
@@ -69,23 +72,19 @@ ThresholdSpec = Tuple[bool, float]
 
 
 class PlotManager:
-    """Redraws the four Graphs-tab plots from aligned data."""
+    """Redraws the two Graphs-tab plots (overlay + error) from aligned data."""
 
     def __init__(
         self,
-        plot_voltage: PlotWidget,
-        plot_current: PlotWidget,
-        plot_temperature: PlotWidget,
+        plot_overlay: PlotWidget,
         plot_error: PlotWidget,
         warning_labels: Optional[Dict[str, QLabel]] = None,
     ) -> None:
-        self.plot_voltage = plot_voltage
-        self.plot_current = plot_current
-        self.plot_temperature = plot_temperature
+        self.plot_overlay = plot_overlay
         self.plot_error = plot_error
         # Optional {"voltage": QLabel, "current": QLabel, ...} banners that
         # get a red "exceeded" message when a threshold is crossed, and are
-        # cleared otherwise.  ``back.py`` wires these to the Graphs tab;
+        # cleared otherwise. ``back.py`` wires these to the Graphs tab;
         # tests that don't care about warnings simply omit them.
         self.warning_labels = warning_labels or {}
 
@@ -103,45 +102,56 @@ class PlotManager:
         aligned: AlignedData,
         enabled_signals: Optional[Iterable[str]] = None,
         thresholds: Optional[Dict[str, ThresholdSpec]] = None,
+        live_window_ms: Optional[float] = None,
     ) -> None:
-        """Redraw all four plots from ``aligned``.
+        """Redraw both plots from ``aligned``.
 
         Parameters
         ----------
         aligned
             Output of :func:`alignment_engine.align`.
         enabled_signals
-            Canonical signal names that the user has ticked on the Config
-            tab.  If ``None``, all signals present in ``aligned`` are
-            enabled.  SoC and SoH are always shown on the error plot when
-            present (they have no checkbox), regardless of this set.
+            Canonical signal names the user has ticked on the Graphs tab's
+            signal-selection row. If ``None``, all signals present in
+            ``aligned`` are enabled. Unlike the previous design, SoC/SoH
+            are **not** force-included — only what's ticked is drawn.
         thresholds
             Optional ``{"voltage": (enabled, value), "current": (enabled,
             value)}`` from the Config tab's threshold-warning controls.
-            When a signal's threshold is enabled, samples above ``value``
-            are highlighted on its overlay plot and the matching warning
-            label (if any) is set to a red summary; otherwise the label
-            is cleared.
+            When a signal's threshold is enabled and that signal is
+            currently plotted, samples above ``value`` are highlighted on
+            the overlay plot and the matching warning label (if any) is
+            set to a red summary; otherwise the label is cleared.
+        live_window_ms
+            When given (live mode only), both plots are pinned to a
+            sliding ``[latest_t - live_window_ms, latest_t]`` X range
+            (in the live pipeline's wire timestamp unit, Unix epoch
+            milliseconds) instead of auto-fitting every accumulated
+            sample. This keeps a live stream's view *shifting* forward at
+            a constant width as new data arrives rather than
+            *compressing* the whole growing history into the same view,
+            and it also guarantees the view snaps back onto the fresh
+            data after a reconnect (auto-range can otherwise get stuck on
+            a stale manual zoom/pan from before a disconnect). ``None``
+            (the offline default) leaves pyqtgraph's normal auto-range
+            behaviour in place so a finished run's full time range is
+            visible.
         """
         thresholds = thresholds or {}
         if enabled_signals is None:
             enabled: Set[str] = set(aligned.signal_names)
         else:
             enabled = set(enabled_signals)
-            # SoC/SoH have no checkbox — always include them on the error
-            # plot when present in the data.
-            enabled |= {"soc", "soh"} & set(aligned.signal_names)
 
-        self._plot_overlay(self.plot_voltage, "voltage", aligned, enabled,
-                          thresholds.get("voltage"))
-        self._plot_overlay(self.plot_current, "current", aligned, enabled,
-                          thresholds.get("current"))
-        self._plot_overlay(self.plot_temperature, "temperature",
-                           aligned, enabled, thresholds.get("temperature"))
+        self._plot_overlay(aligned, enabled, thresholds)
         self._plot_errors(aligned, enabled)
 
+        if live_window_ms is not None and aligned.timestamps.size > 0:
+            t_max = float(np.nanmax(aligned.timestamps))
+            self._apply_live_window(t_max, live_window_ms)
+
     def clear_all(self) -> None:
-        """Clear every plot.  Called by ``back.py`` when new files are loaded."""
+        """Clear every plot. Called by ``back.py`` when new files are loaded."""
         for plot in self._all_plots():
             plot.clear()
             self._clear_legend(plot)
@@ -150,8 +160,7 @@ class PlotManager:
     # Internals
     # ------------------------------------------------------------------
     def _all_plots(self):
-        return (self.plot_voltage, self.plot_current,
-                self.plot_temperature, self.plot_error)
+        return (self.plot_overlay, self.plot_error)
 
     @staticmethod
     def _clear_legend(plot: PlotWidget) -> None:
@@ -159,59 +168,84 @@ class PlotManager:
 
         pyqtgraph 0.14 dropped the convenience ``getLegend()`` accessor;
         the legend is now stored on ``PlotItem`` and may be ``None`` if
-        ``addLegend()`` was never called.  Clearing it on re-plot keeps
+        ``addLegend()`` was never called. Clearing it on re-plot keeps
         the legend from accumulating stale entries across updates.
         """
         legend = getattr(plot.plotItem, "legend", None)
         if legend is not None:
             legend.clear()
 
+    def _apply_live_window(self, t_max: float, window_ms: float) -> None:
+        """Pin both plots' X range to the latest ``window_ms`` milliseconds.
+
+        Called unconditionally on every live tick (not just once) so the
+        view always tracks the newest data — this also overrides any
+        manual pan/zoom the user made before, which is what prevents a
+        stream from appearing to "go blank" after a disconnect/reconnect
+        (a stale manual range that no longer contains the fresh, reset
+        buffer's timestamps).
+        """
+        t_min = t_max - max(window_ms, 0.0)
+        for plot in self._all_plots():
+            plot.setXRange(t_min, t_max, padding=0)
+
     def _plot_overlay(
         self,
-        plot: PlotWidget,
-        signal_name: str,
         aligned: AlignedData,
         enabled: Set[str],
-        threshold: Optional[ThresholdSpec] = None,
+        thresholds: Dict[str, ThresholdSpec],
     ) -> None:
-        """Plot twin vs ECU for one signal on its dedicated PlotWidget."""
+        """Plot twin vs ECU for every enabled signal on the shared overlay plot."""
+        plot = self.plot_overlay
         plot.clear()
         self._clear_legend(plot)
-        label = self.warning_labels.get(signal_name)
 
-        # If the signal isn't in this run (e.g. 3-signal ECU CSV) or the
-        # user has unticked its checkbox, leave the plot empty.
-        if signal_name not in aligned.signals or signal_name not in enabled:
-            plot.setLabel("left", signal_name.title(), units="")
-            if label is not None:
-                label.setText("")
-            return
+        for label_widget in self.warning_labels.values():
+            label_widget.setText("")
 
-        sig: AlignedSignal = aligned.signals[signal_name]
-        ts = aligned.timestamps
+        colour_idx = 0
+        any_plotted = False
+        for name in _SIGNAL_ORDER:
+            if name not in aligned.signals or name not in enabled:
+                continue
 
-        # Mask out NaN pairs so the curves don't draw spurious vertical jumps.
-        valid = (~np.isnan(sig.twin_values)) & (~np.isnan(sig.ecu_values))
-        t_win = ts[valid]
-        twin_v = sig.twin_values[valid]
-        ecu_v = sig.ecu_values[valid]
+            sig: AlignedSignal = aligned.signals[name]
+            ts = aligned.timestamps
 
-        plot.plot(t_win, twin_v, pen=pg.mkPen(_TWIN_COLOUR, width=1.5),
-                  name="Digital Twin")
-        plot.plot(t_win, ecu_v, pen=pg.mkPen(_ECU_COLOUR, width=2.0),
-                  name="ECU")
+            # Mask out NaN pairs so the curves don't draw spurious vertical
+            # jumps.
+            valid = (~np.isnan(sig.twin_values)) & (~np.isnan(sig.ecu_values))
+            t_win = ts[valid]
+            twin_v = sig.twin_values[valid]
+            ecu_v = sig.ecu_values[valid]
 
-        plot.setLabel("left", signal_name.title())
-        plot.setLabel("bottom", "Time", units="s")
+            colour = _SIGNAL_COLOURS.get(
+                name, _SIGNAL_COLOUR_CYCLE[colour_idx % len(_SIGNAL_COLOUR_CYCLE)]
+            )
+            colour_idx += 1
+            title = name.title()
 
-        self._apply_threshold(plot, label, signal_name, t_win, ecu_v,
-                              threshold)
+            plot.plot(t_win, twin_v,
+                      pen=pg.mkPen(colour, width=1.5, style=Qt_PenStyle_Dash()),
+                      name=f"{title} (Twin)")
+            plot.plot(t_win, ecu_v, pen=pg.mkPen(colour, width=2.0),
+                      name=f"{title} (ECU)")
+            any_plotted = True
+
+            self._apply_threshold(plot, self.warning_labels.get(name), name,
+                                  colour, t_win, ecu_v, thresholds.get(name))
+
+        plot.setLabel("left", "Value")
+        plot.setLabel("bottom", "Time (offline: file units; live: Unix ms)")
+        if not any_plotted:
+            plot.setLabel("left", "Value (no signal selected)")
 
     def _apply_threshold(
         self,
         plot: PlotWidget,
         label: Optional[QLabel],
         signal_name: str,
+        colour,
         t_win: np.ndarray,
         ecu_v: np.ndarray,
         threshold: Optional[ThresholdSpec],
@@ -224,10 +258,9 @@ class PlotManager:
         the offending stretch of curve is redrawn in bold red with a
         translucent fill down to the limit, and ``label`` gets a plain-
         English summary of the worst breach. With nothing to warn about
-        (disabled, no data, or never exceeded) the label is cleared.
+        (disabled, no data, or never exceeded) the label is left cleared
+        (already reset for every signal at the top of ``_plot_overlay``).
         """
-        if label is not None:
-            label.setText("")
         if threshold is None or ecu_v.size == 0:
             return
         enabled, limit = threshold
@@ -238,7 +271,7 @@ class PlotManager:
             pos=limit, angle=0, movable=False,
             pen=pg.mkPen(_THRESHOLD_LINE_COLOUR, width=1.5,
                         style=Qt_PenStyle_Dash()),
-            label=f"limit {limit:g}",
+            label=f"{signal_name.title()} limit {limit:g}",
             labelOpts={"color": _THRESHOLD_LINE_COLOUR, "position": 0.95},
         ))
 
@@ -249,7 +282,7 @@ class PlotManager:
         flood = np.where(exceeded, ecu_v, np.nan)
         plot.plot(t_win, flood, pen=pg.mkPen(_EXCEEDANCE_COLOUR, width=2.5),
                   fillLevel=limit, brush=_EXCEEDANCE_FILL,
-                  name="Over limit")
+                  name=f"{signal_name.title()} over limit")
 
         if label is not None:
             worst_idx = int(np.nanargmax(np.where(exceeded, ecu_v, -np.inf)))
@@ -269,16 +302,17 @@ class PlotManager:
         self._clear_legend(plot)
 
         colour_idx = 0
-        for name, sig in aligned.signals.items():
-            if name not in enabled:
+        for name in _SIGNAL_ORDER:
+            if name not in aligned.signals or name not in enabled:
                 continue
+            sig = aligned.signals[name]
 
             ts = aligned.timestamps
             err = sig.errors
             valid = (~np.isnan(sig.twin_values)) & (~np.isnan(sig.ecu_values))
 
-            colour = _ERROR_COLOURS.get(
-                name, _ERROR_COLOUR_CYCLE[colour_idx % len(_ERROR_COLOUR_CYCLE)]
+            colour = _SIGNAL_COLOURS.get(
+                name, _SIGNAL_COLOUR_CYCLE[colour_idx % len(_SIGNAL_COLOUR_CYCLE)]
             )
             colour_idx += 1
 
@@ -292,7 +326,7 @@ class PlotManager:
                                                    style=Qt_PenStyle_Dash(),
                                                    width=1.0)))
         plot.setLabel("left", "Error (ECU − Twin)")
-        plot.setLabel("bottom", "Time", units="s")
+        plot.setLabel("bottom", "Time (offline: file units; live: Unix ms)")
 
 
 # ---------------------------------------------------------------------------
