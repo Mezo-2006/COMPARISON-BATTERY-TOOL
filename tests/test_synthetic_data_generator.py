@@ -146,6 +146,15 @@ class TestRanges:
 # Batches are accepted by the real live_schema parser
 # ---------------------------------------------------------------------------
 class TestSchemaCompliance:
+    def test_generator_uses_id_as_timestamp_field(self):
+        gen = SyntheticBatteryGenerator(GeneratorConfig(seed=42))
+        twin_payload, ecu_payload = gen.batch(5)
+
+        for payload in (twin_payload, ecu_payload):
+            for sample in payload["samples"]:
+                assert "id" in sample
+                assert "timestamp" not in sample
+
     def test_twin_batch_parses_and_routes_as_twin(self):
         gen = SyntheticBatteryGenerator(GeneratorConfig(seed=42))
         twin_payload, _ = gen.batch(5)
