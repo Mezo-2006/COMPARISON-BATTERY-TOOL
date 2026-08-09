@@ -200,14 +200,14 @@ current buffers and stashes it as `self.aligned_data` /
 
 **Single sample:**
 ```json
-{"t": 12.34, "v": 3.65, "i": -1.2, "temp": 28.1, "soc": 78.3, "id": "s1"}
+{"t": 12.34, "v": 3.65, "i": -1.2, "temp": 28.1, "soc": 78.3, "soh": 99.0, "id": "s1"}
 ```
 
 **Batch:**
 ```json
 {"samples": [
-    {"t": 12.30, "v": 3.65, "id": "a"},
-    {"t": 12.40, "v": 3.64, "id": "b"}
+    {"t": 12.30, "v": 3.65, "i": -1.2, "temp": 28.0, "soc": 78.2, "soh": 99.0, "id": "a"},
+    {"t": 12.40, "v": 3.64, "i": -1.1, "temp": 28.1, "soc": 78.3, "soh": 99.0, "id": "b"}
 ]}
 ```
 

@@ -29,7 +29,7 @@ from mqtt_worker import MqttWorker
 # ──────────────────────────────────────────────────────────────────────
 #  Configuration — edit these values to match your broker / topics.
 # ──────────────────────────────────────────────────────────────────────
-HOST = "10.212.239.59"
+HOST = "172.20.10.2"
 PORT = 1883
 USERNAME = ""            # leave empty for anonymous broker access
 PASSWORD = ""
@@ -38,8 +38,8 @@ QOS = 1
 # A list of (topic_filter, qos) pairs the worker should subscribe to.
 # Use MQTT wildcard filters ("+"/single-level, "#" /multi-level) per MQTT-3.1.
 TOPICS = [
-    ("bms/actual/voltage", QOS),
-    ("bms/twin/#", QOS),
+    ("bms/actual/data", QOS),
+    ("bms/twin/data", QOS),
 ]
 
 # Idle-exit watchdog: if no message arrives for this long, quit. Set to 0

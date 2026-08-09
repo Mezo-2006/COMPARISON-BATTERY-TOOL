@@ -25,13 +25,13 @@ Two JSON shapes are supported. The publisher picks one per message.
 
 **Single sample** — one point in time, partial signals allowed::
 
-    {"t": 12.34, "v": 3.65, "i": -1.2, "temp": 28.1}
+    {"t": 12.34, "v": 3.65, "i": -1.2, "temp": 28.1, "soc": 78.3, "soh": 99.0}
 
 **Batch** — multiple points, e.g. a 1-second window of 10 Hz samples::
 
     {"samples": [
-        {"t": 12.30, "v": 3.65, "i": -1.2, "temp": 28.0},
-        {"t": 12.40, "v": 3.64, "i": -1.1, "temp": 28.1},
+        {"t": 12.30, "v": 3.65, "i": -1.2, "temp": 28.0, "soc": 78.2, "soh": 99.0},
+        {"t": 12.40, "v": 3.64, "i": -1.1, "temp": 28.1, "soc": 78.3, "soh": 99.0},
     ]}
 
 Keys are matched case-insensitively against the alias groups below; the
@@ -127,7 +127,8 @@ class LiveSample:
         ``"twin"`` or ``"ecu"`` — which stream this sample belongs to.
     columns
         Mapping of canonical column name → value, e.g.
-        ``{"timestamp": 12.34, "voltage": 3.65}``.  Any canonical
+        ``{"timestamp": 12.34, "voltage": 3.65, "current": -1.2,
+        "temperature": 28.1, "soc": 78.3, "soh": 99.0}``.  Any canonical
         signal not carried by the sample is simply absent from the dict
         (the accumulator fills ``NaN``).
     source_keys
