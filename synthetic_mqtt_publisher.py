@@ -36,7 +36,10 @@ import sys
 from PyQt5 import QtCore
 
 from mqtt_worker import MqttWorker
-from synthetic_data_generator import GeneratorConfig, SyntheticBatteryGenerator, batch_to_json_bytes
+from synthetic_data_generator import (
+    GeneratorConfig, SyntheticBatteryGenerator, batch_to_json_bytes,
+    ID_MODE_SEQUENCE, ID_MODE_TIMESTAMP,
+)
 
 
 class PublisherApp(QtCore.QObject):
@@ -45,7 +48,10 @@ class PublisherApp(QtCore.QObject):
     def __init__(self, args: argparse.Namespace):
         super().__init__()
         self._args = args
-        self._gen = SyntheticBatteryGenerator(GeneratorConfig(seed=args.seed, dt=args.dt))
+        self._gen = SyntheticBatteryGenerator(GeneratorConfig(
+            seed=args.seed, dt=args.dt,
+            id_mode=args.id_mode, start_id=args.start_id,
+        ))
         self._batches_sent = 0
 
         self._thread = QtCore.QThread()
@@ -72,7 +78,7 @@ class PublisherApp(QtCore.QObject):
     def _on_connected(self) -> None:
         a = self._args
         print(f"[publisher] connected to {a.host}:{a.port}  seed={a.seed}  "
-              f"topics=({a.twin_topic}, {a.ecu_topic})")
+              f"id_mode={a.id_mode}  topics=({a.twin_topic}, {a.ecu_topic})")
         self._timer.start()
 
     def _on_disconnected(self, rc: int) -> None:
@@ -117,6 +123,12 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--ecu-topic", default="bms/actual/data", help="must fall under the tool's ecu root, default bms/actual/#")
     p.add_argument("--qos", type=int, default=1, choices=(0, 1, 2))
     p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--id-mode", choices=(ID_MODE_SEQUENCE, ID_MODE_TIMESTAMP),
+                   default=ID_MODE_SEQUENCE,
+                   help="primary field: 'sequence' (id counter, default) or "
+                        "'timestamp' (Unix-epoch ms)")
+    p.add_argument("--start-id", type=int, default=0,
+                   help="sequence mode: first sample id")
     p.add_argument("--dt", type=float, default=0.1, help="seconds of simulated time per sample")
     p.add_argument("--batch-size", type=int, default=10, help="samples per MQTT message")
     p.add_argument("--interval-ms", type=int, default=1000, help="wall-clock ms between published batches")

@@ -207,6 +207,36 @@ def test_live_window_pins_x_range_to_latest_samples(main_window, make_aligned_da
     assert ex_min == pytest.approx(70.0)
 
 
+# ---------------------------------------------------------------------------
+# axis_kind-aware bottom-axis label
+# ---------------------------------------------------------------------------
+def test_timestamp_axis_kind_labels_time(main_window, twin_result_five, ecu_result_five):
+    aligned = align(twin_result_five, ecu_result_five, ALIGN_NEAREST)
+    assert aligned.axis_kind == "timestamp"
+    pm = _make_pm(main_window)
+    pm.update(aligned)
+
+    label = main_window.plotWidgetVoltage.getPlotItem().getAxis("bottom").labelText
+    assert "Time" in label
+    err_label = main_window.plotWidgetError.getPlotItem().getAxis("bottom").labelText
+    assert "Time" in err_label
+
+
+def test_sequence_axis_kind_labels_sample_id(main_window, make_aligned_data):
+    aligned = make_aligned_data(
+        timestamps=[0.0, 1.0, 2.0],
+        signals={"voltage": ([3.3, 3.3, 3.3], [3.3, 3.3, 3.3])},
+    )
+    aligned.axis_kind = "sequence"
+    pm = _make_pm(main_window)
+    pm.update(aligned)
+
+    label = main_window.plotWidgetVoltage.getPlotItem().getAxis("bottom").labelText
+    assert label == "Sample ID"
+    err_label = main_window.plotWidgetError.getPlotItem().getAxis("bottom").labelText
+    assert err_label == "Sample ID"
+
+
 def test_no_live_window_leaves_default_autorange(main_window, make_aligned_data):
     """Offline calls (live_window_ms=None) shouldn't pin a live sliding window."""
     aligned = make_aligned_data(

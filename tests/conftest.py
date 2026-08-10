@@ -51,13 +51,15 @@ def _make_load_result(
     rows: dict,
     source_columns: list | None = None,
     warnings: list | None = None,
+    axis_kind: str = "timestamp",
 ) -> LoadResult:
     """Build a LoadResult from a dict-of-columns ``{name: [values]}``.
 
     ``timestamp`` column is sorted ascending and all arrays must share the
     same length.  ``source_columns`` defaults to the canonical names; pass
     a list to mimic the original CSV headers (used by tests that verify
-    UI-display fields).
+    UI-display fields).  ``axis_kind`` defaults to ``"timestamp"``; pass
+    ``"sequence"`` to build a fixture that mimics a plain id-counter axis.
     """
     df = pd.DataFrame(rows)
     df = df.sort_values("timestamp").reset_index(drop=True)
@@ -75,6 +77,7 @@ def _make_load_result(
         source_columns=source_columns,
         time_range=(float(timestamp[0]), float(timestamp[-1])),
         warnings=warnings or [],
+        axis_kind=axis_kind,
     )
 
 

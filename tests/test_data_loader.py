@@ -191,6 +191,43 @@ def test_rows_sorted_by_timestamp(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# axis_kind: "id" header -> sequence, everything else -> timestamp
+# ---------------------------------------------------------------------------
+def test_id_header_sets_sequence_axis_kind(tmp_path):
+    csv = tmp_path / "seq.csv"
+    csv.write_text("id,voltage,current,temperature,soc,soh\n"
+                   "0,3.3,1.2,25.0,80.0,95.0\n"
+                   "1,3.31,1.21,25.1,79.9,95.0\n")
+    r = load_csv(str(csv), "twin")
+    assert r.axis_kind == "sequence"
+    assert "timestamp" in r.df.columns  # still stored internally as "timestamp"
+    assert list(r.df["timestamp"]) == [0.0, 1.0]
+
+
+def test_timestamp_header_sets_timestamp_axis_kind(tmp_path):
+    csv = tmp_path / "ts.csv"
+    csv.write_text("timestamp,voltage,current,temperature,soc,soh\n"
+                   "0.0,3.3,1.2,25.0,80.0,95.0\n")
+    r = load_csv(str(csv), "twin")
+    assert r.axis_kind == "timestamp"
+
+
+def test_t_claimed_as_timestamp_is_not_sequence(tmp_path):
+    """`t` (claimed as timestamp via the T-ambiguity rule) is real time,
+    not a sequence counter -- only a header literally named `id` is."""
+    csv = tmp_path / "t.csv"
+    csv.write_text("t,V,I,Temperature,SOC,SOH\n"
+                   "0.0,3.3,1.2,25.0,80.0,95.0\n")
+    r = load_csv(str(csv), "twin")
+    assert r.axis_kind == "timestamp"
+
+
+def test_default_load_result_axis_kind_is_timestamp(make_load_result):
+    r = make_load_result("twin", {"timestamp": [0.0], "voltage": [3.3]})
+    assert r.axis_kind == "timestamp"
+
+
+# ---------------------------------------------------------------------------
 # Fatal errors
 # ---------------------------------------------------------------------------
 def test_file_not_found_raises():

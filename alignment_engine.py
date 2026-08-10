@@ -108,6 +108,12 @@ class AlignedData:
     max_delta_t: float                        # largest |ecu_t - matched_twin_t|
     alignment_method: str                     # "nearest" or "interpolate"
     warnings: List[str] = field(default_factory=list)
+    # "timestamp" (real time) or "sequence" (plain sample counter) — see
+    # ``data_loader.LoadResult.axis_kind``. Taken from the ECU side (the
+    # reference timeline this module aligns onto); a mismatch with the
+    # twin side is reported in ``warnings`` rather than raised, since
+    # alignment itself only needs a sortable numeric axis either way.
+    axis_kind: str = "timestamp"
 
     @property
     def signal_names(self) -> List[str]:
@@ -256,6 +262,19 @@ def align(
             f"{n_outside} ECU sample(s) could not be matched ({reason})."
         )
 
+    # --- Axis kind -----------------------------------------------------
+    # ECU is the reference timeline this module aligns onto, so its axis
+    # kind wins. A twin/ECU mismatch (one's a real time axis, the other a
+    # sequence counter) can't happen from a single generator run, but
+    # guard it anyway rather than silently mislabel the Graphs tab.
+    twin_axis_kind = getattr(twin_result, "axis_kind", "timestamp")
+    ecu_axis_kind = getattr(ecu_result, "axis_kind", "timestamp")
+    if twin_axis_kind != ecu_axis_kind:
+        warnings.append(
+            f"Twin and ECU disagree on axis kind (twin={twin_axis_kind!r}, "
+            f"ecu={ecu_axis_kind!r}); using ECU's ({ecu_axis_kind!r})."
+        )
+
     return AlignedData(
         timestamps=ecu_ts,
         signals=signals,
@@ -264,6 +283,7 @@ def align(
         max_delta_t=max_delta_t,
         alignment_method=method,
         warnings=warnings,
+        axis_kind=ecu_axis_kind,
     )
 
 

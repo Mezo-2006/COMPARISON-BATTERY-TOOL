@@ -230,6 +230,52 @@ class TestLiveSampleDataclass:
         s = LiveSample("twin", {"timestamp": 0.0})
         assert s.id is None
 
+    def test_axis_kind_defaults_timestamp(self):
+        s = LiveSample("twin", {"timestamp": 0.0})
+        assert s.axis_kind == "timestamp"
+
+
+# ---------------------------------------------------------------------------
+# axis_kind: bare "id" (no time-like key) -> sequence
+# ---------------------------------------------------------------------------
+class TestAxisKind:
+    def test_id_only_payload_is_sequence(self):
+        samples = parse_message(
+            "bms/twin", _payload({"id": 0, "v": 3.3}), TWIN_ROOT, ECU_ROOT,
+        )
+        assert samples[0].axis_kind == "sequence"
+        assert samples[0].columns["timestamp"] == 0.0
+
+    def test_timestamp_payload_is_timestamp(self):
+        samples = parse_message(
+            "bms/twin", _payload({"timestamp": 1700000000000.0, "v": 3.3}),
+            TWIN_ROOT, ECU_ROOT,
+        )
+        assert samples[0].axis_kind == "timestamp"
+
+    def test_short_t_key_is_timestamp_not_sequence(self):
+        samples = parse_message(
+            "bms/twin", _payload({"t": 12.34, "v": 3.65}), TWIN_ROOT, ECU_ROOT,
+        )
+        assert samples[0].axis_kind == "timestamp"
+
+    def test_id_and_real_timestamp_both_present_prefers_timestamp(self):
+        # A real time-like key wins over "id" -- "id" is only a fallback.
+        samples = parse_message(
+            "bms/twin", _payload({"timestamp": 5.0, "id": "dedupe-only", "v": 3.3}),
+            TWIN_ROOT, ECU_ROOT,
+        )
+        assert samples[0].axis_kind == "timestamp"
+        assert samples[0].columns["timestamp"] == 5.0
+
+    def test_batch_samples_each_get_axis_kind(self):
+        samples = parse_message(
+            "bms/twin",
+            _payload({"samples": [{"id": 0, "v": 3.3}, {"id": 1, "v": 3.4}]}),
+            TWIN_ROOT, ECU_ROOT,
+        )
+        assert all(s.axis_kind == "sequence" for s in samples)
+
 
 # ---------------------------------------------------------------------------
 # QoS-1 deduplication id

@@ -92,6 +92,45 @@ def test_partial_overlap_only_common_signals_aligned(twin_result_five,
 
 
 # ---------------------------------------------------------------------------
+# axis_kind: propagated from the ECU (reference-timeline) side
+# ---------------------------------------------------------------------------
+def test_axis_kind_defaults_timestamp(twin_result_five, ecu_result_five):
+    aligned = align(twin_result_five, ecu_result_five, ALIGN_NEAREST)
+    assert aligned.axis_kind == "timestamp"
+
+
+def test_axis_kind_sequence_propagates(make_load_result):
+    twin = make_load_result(
+        "twin",
+        {"timestamp": [0.0, 1.0], "voltage": [3.3, 3.4]},
+        axis_kind="sequence",
+    )
+    ecu = make_load_result(
+        "ecu",
+        {"timestamp": [0.0, 1.0], "voltage": [3.31, 3.41]},
+        axis_kind="sequence",
+    )
+    aligned = align(twin, ecu, ALIGN_NEAREST)
+    assert aligned.axis_kind == "sequence"
+
+
+def test_axis_kind_mismatch_warns_and_uses_ecu(make_load_result):
+    twin = make_load_result(
+        "twin",
+        {"timestamp": [0.0, 1.0], "voltage": [3.3, 3.4]},
+        axis_kind="sequence",
+    )
+    ecu = make_load_result(
+        "ecu",
+        {"timestamp": [0.0, 1.0], "voltage": [3.31, 3.41]},
+        axis_kind="timestamp",
+    )
+    aligned = align(twin, ecu, ALIGN_NEAREST)
+    assert aligned.axis_kind == "timestamp"  # ECU wins
+    assert any("disagree on axis kind" in w for w in aligned.warnings)
+
+
+# ---------------------------------------------------------------------------
 # Errors: no common signals / no time overlap
 # ---------------------------------------------------------------------------
 def test_no_common_signals_raises(make_load_result):

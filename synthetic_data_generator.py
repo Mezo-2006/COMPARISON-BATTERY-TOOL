@@ -2,9 +2,37 @@
 
 This module produces JSON payloads shaped exactly like ``live_schema.py``
 expects on the wire — the "batch" shape (``{"samples": [...]}``) with
-canonical-alias keys and a per-sample ``id`` that is a small, increasing
-counter (starting from 0 by default). The payload intentionally does not
-include a separate ``timestamp`` key.
+canonical-alias keys and a configurable primary/first field
+(:data:`GeneratorConfig.id_mode`):
+
+- ``"sequence"`` (**default**) — each sample carries only an ``id`` key: a
+  small, increasing integer counter starting from
+  :data:`GeneratorConfig.start_id` (default 0). No ``timestamp`` key is
+  present at all; ``live_schema`` accepts a bare ``id`` as the timestamp
+  slot and flags the parsed result ``axis_kind="sequence"`` so the tool's
+  Graphs tab labels the X axis "Sample ID" instead of a time unit.
+- ``"timestamp"`` — each sample instead carries a ``timestamp`` key: real
+  Unix-epoch **milliseconds**, advancing with simulated elapsed time from
+  the moment the generator was constructed. See "Timestamp convention"
+  below.
+
+Only one of the two keys is ever present on a given sample — pick the
+mode that matches what you're testing (a plain event-ordering scenario
+vs. one that exercises real-time-based rules like the Live tab's
+sliding window or the Events tab's Timeout/Communication-Loss checks).
+
+Timestamp convention
+---------------------
+In ``id_mode="timestamp"``, the ``timestamp`` field is Unix-epoch
+**milliseconds** — the unit the rest of the live pipeline assumes (see
+``live_accumulator.DEFAULT_MAX_AGE_MS``, ``alignment_engine``'s
+``_MAX_DELTA_T_WARN_MS``, and ``back.py``'s ``_LIVE_PLOT_WINDOW_MS``). A
+real ECU/Simulink publisher feeding this tool's Live tab in "timestamp"
+mode must emit the same unit. The very first sample's timestamp is the
+generator's construction time (``time.time() * 1000``); each later
+sample adds ``dt`` (converted to ms) of simulated elapsed time, and the
+ECU stream is additionally offset by :data:`GeneratorConfig.ecu_time_offset`
+seconds from the twin, matching real twin/ECU sampling skew.
 
 Three independent, seed-derived sources of randomness
 -------------------------------------------------------
@@ -37,6 +65,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import time
 from dataclasses import dataclass, field
 from typing import Dict, List, Tuple
 
@@ -45,6 +74,10 @@ import numpy as np
 # Canonical signal ordering — kept in sync with data_loader / live_schema.
 _SIGNALS: List[str] = ["voltage", "current", "temperature", "soc", "soh"]
 
+# GeneratorConfig.id_mode values.
+ID_MODE_SEQUENCE = "sequence"
+ID_MODE_TIMESTAMP = "timestamp"
+
 
 @dataclass
 class GeneratorConfig:
@@ -52,9 +85,10 @@ class GeneratorConfig:
 
     seed: int = 42
     dt: float = 0.1                       # seconds between twin samples
-    ecu_time_offset: float = 0.05         # kept for publisher compatibility
+    ecu_time_offset: float = 0.05         # ECU sample offset from twin (seconds)
+    id_mode: str = ID_MODE_SEQUENCE       # "sequence" (default) or "timestamp"
     start_time: float | None = None       # deprecated alias for start_id
-    start_id: int = 0                     # first sample id for twin/ecu
+    start_id: int = 0                     # sequence mode: first sample id
 
     # Starting state (matches the project's CSV fixtures).
     start_voltage: float = 3.30           # V
@@ -116,6 +150,12 @@ class SyntheticBatteryGenerator:
             self._seq = int(self.cfg.start_time)
         else:
             self._seq = int(self.cfg.start_id)
+        # id_mode="timestamp" only: elapsed simulated seconds since
+        # construction, and the real wall-clock moment construction
+        # happened -- together these give Unix-ms timestamps that advance
+        # realistically instead of jumping straight to "now" on every step.
+        self._elapsed_s = 0.0
+        self._t0_ms = time.time() * 1000.0
         self._true = {
             "voltage": self.cfg.start_voltage,
             "current": self.cfg.start_current,
@@ -167,10 +207,20 @@ class SyntheticBatteryGenerator:
                 cfg.divergence_bias[name], cfg.divergence_std[name])
             ecu[name] = self._clamp(name, true_now[name] + ecu_sensor_draw + gap)
 
-        sample_id = self._seq
-        twin["id"] = sample_id
-        ecu["id"] = sample_id
-        self._seq += 1
+        if cfg.id_mode == ID_MODE_TIMESTAMP:
+            # Real Unix-epoch ms, advancing with simulated elapsed time
+            # from construction. ECU is offset from twin the same way
+            # ecu_time_offset already models real twin/ECU sampling skew.
+            twin["timestamp"] = round(self._t0_ms + self._elapsed_s * 1000.0, 3)
+            ecu["timestamp"] = round(
+                self._t0_ms + (self._elapsed_s + cfg.ecu_time_offset) * 1000.0, 3
+            )
+            self._elapsed_s += dt
+        else:
+            sample_id = self._seq
+            twin["id"] = sample_id
+            ecu["id"] = sample_id
+            self._seq += 1
         return twin, ecu
 
     def batch(self, n: int) -> Tuple[dict, dict]:
@@ -205,9 +255,17 @@ def _main() -> None:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--batches", type=int, default=3, help="number of batches to print")
     parser.add_argument("--batch-size", type=int, default=5, help="samples per batch")
+    parser.add_argument("--id-mode", choices=(ID_MODE_SEQUENCE, ID_MODE_TIMESTAMP),
+                        default=ID_MODE_SEQUENCE,
+                        help="primary field: 'sequence' (id counter, default) "
+                             "or 'timestamp' (Unix-epoch ms)")
+    parser.add_argument("--start-id", type=int, default=0,
+                        help="sequence mode: first sample id")
     args = parser.parse_args()
 
-    gen = SyntheticBatteryGenerator(GeneratorConfig(seed=args.seed))
+    gen = SyntheticBatteryGenerator(GeneratorConfig(
+        seed=args.seed, id_mode=args.id_mode, start_id=args.start_id,
+    ))
     for i in range(args.batches):
         twin_payload, ecu_payload = gen.batch(args.batch_size)
         print(f"--- batch {i} : twin ---")

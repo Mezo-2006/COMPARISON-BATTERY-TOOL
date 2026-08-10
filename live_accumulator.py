@@ -105,11 +105,20 @@ class _SourceBuffer:
         # it only reports signals that were actually *seen* in some
         # sample, not every canonical column padded with NaN.
         self._df = pd.DataFrame()
+        # "timestamp" or "sequence" — set from each sample's own
+        # LiveSample.axis_kind. A stream is one mode for its whole life,
+        # so just remembering the latest write is correct.
+        self.axis_kind = "timestamp"
 
     # ------------------------------------------------------------------
     # Append
     # ------------------------------------------------------------------
-    def add(self, columns: dict, sample_id: Optional[str] = None) -> None:
+    def add(
+        self,
+        columns: dict,
+        sample_id: Optional[str] = None,
+        axis_kind: str = "timestamp",
+    ) -> None:
         """Append one sample's columns (canonical name → value).
 
         Builds a one-row DataFrame from only the columns present in the
@@ -117,7 +126,9 @@ class _SourceBuffer:
         NaN on the union, so a later sample carrying a new signal
         transparently widens the buffer.  When ``sample_id`` is not
         ``None`` (QoS-1 dedup), an ``id`` column is added so ``_trim``
-        can drop redeliveries.
+        can drop redeliveries.  ``axis_kind`` (from the sample's own
+        ``LiveSample.axis_kind``) is remembered on the buffer so
+        ``build_results()`` can pass it through to the ``LoadResult``.
         """
         row = {c: [v] for c, v in columns.items() if c in _CANONICAL_COLUMNS}
         if "timestamp" not in row:
@@ -126,6 +137,7 @@ class _SourceBuffer:
         if sample_id is not None:
             row["id"] = [sample_id]
 
+        self.axis_kind = axis_kind
         new_row = pd.DataFrame(row)
         self._df = pd.concat([self._df, new_row], ignore_index=True)
         self._trim()
@@ -245,7 +257,7 @@ class LiveBuffer:
             # live_schema only ever produces "twin"/"ecu", but stay
             # defensive — a future source would otherwise silently drop.
             return
-        buf.add(sample.columns, sample_id=sample.id)
+        buf.add(sample.columns, sample_id=sample.id, axis_kind=sample.axis_kind)
 
     def add_samples(self, samples: List[LiveSample]) -> None:
         """Convenience: feed a batch of samples in arrival order."""
@@ -278,11 +290,13 @@ class LiveBuffer:
             df=twin_df,
             source_label="twin",
             source_columns=list(twin_df.columns),
+            axis_kind=self._buffers["twin"].axis_kind,
         )
         ecu_result = build_load_result(
             df=ecu_df,
             source_label="ecu",
             source_columns=list(ecu_df.columns),
+            axis_kind=self._buffers["ecu"].axis_kind,
         )
         return twin_result, ecu_result
 
@@ -311,3 +325,4 @@ class LiveBuffer:
         """Drop every row from both buffers (used on disconnect)."""
         for buf in self._buffers.values():
             buf._df = pd.DataFrame()
+            buf.axis_kind = "timestamp"

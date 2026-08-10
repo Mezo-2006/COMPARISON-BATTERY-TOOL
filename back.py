@@ -96,6 +96,13 @@ _FLOAT_FMT = "{:.4f}"
 # reconnect), which reads as "the graphs stopped appearing".
 _LIVE_PLOT_WINDOW_MS = 60_000.0
 
+# Same idea, but for a "sequence" axis (a plain sample-id counter — see
+# synthetic_data_generator's id_mode="sequence"): a millisecond-scale
+# window is meaningless once the axis isn't time at all, so live mode
+# uses this instead whenever ``AlignedData.axis_kind == "sequence"``
+# (last N ids, rather than last N ms).
+_LIVE_PLOT_WINDOW_SEQUENCE = 200.0
+
 
 def _populate_preview_table(
     table: QtWidgets.QTableWidget,
@@ -933,10 +940,13 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         # Re-render plots with the currently-enabled signal set. Pin the
         # sliding live window so the view shifts with new data instead of
         # compressing to fit the whole growing buffer (see
-        # _LIVE_PLOT_WINDOW_S).
+        # _LIVE_PLOT_WINDOW_MS / _LIVE_PLOT_WINDOW_SEQUENCE). The window
+        # width itself depends on what the axis actually is.
+        window = (_LIVE_PLOT_WINDOW_SEQUENCE if aligned.axis_kind == "sequence"
+                  else _LIVE_PLOT_WINDOW_MS)
         self.plot_manager.update(aligned, self._enabled_signals_set(),
                                  self._read_threshold_settings(),
-                                 live_window_ms=_LIVE_PLOT_WINDOW_MS)
+                                 live_window_ms=window)
         # Feed only the newly-arrived rows through the (persistent) live
         # event detector.
         self._run_live_event_detection(aligned)

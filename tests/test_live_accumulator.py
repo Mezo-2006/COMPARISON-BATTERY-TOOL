@@ -282,3 +282,41 @@ class TestQos1Dedup:
         buf.add_sample(_ecu_sample(0.0))
         twin_lr, _ = buf.build_results()
         assert twin_lr.row_count == 1  # the str "1" dup is dropped
+
+
+# ---------------------------------------------------------------------------
+# axis_kind propagation: LiveSample.axis_kind -> LoadResult.axis_kind
+# ---------------------------------------------------------------------------
+class TestAxisKind:
+    def test_default_axis_kind_is_timestamp(self):
+        buf = LiveBuffer()
+        buf.add_sample(_twin_sample(0.0))
+        buf.add_sample(_ecu_sample(0.0))
+        twin_lr, ecu_lr = buf.build_results()
+        assert twin_lr.axis_kind == "timestamp"
+        assert ecu_lr.axis_kind == "timestamp"
+
+    def test_sequence_axis_kind_propagates(self):
+        buf = LiveBuffer()
+        seq_twin = LiveSample(
+            "twin", {"timestamp": 0.0, "voltage": 3.3}, axis_kind="sequence",
+        )
+        seq_ecu = LiveSample(
+            "ecu", {"timestamp": 0.0, "voltage": 3.31}, axis_kind="sequence",
+        )
+        buf.add_sample(seq_twin)
+        buf.add_sample(seq_ecu)
+        twin_lr, ecu_lr = buf.build_results()
+        assert twin_lr.axis_kind == "sequence"
+        assert ecu_lr.axis_kind == "sequence"
+
+    def test_clear_resets_axis_kind_to_timestamp(self):
+        buf = LiveBuffer()
+        buf.add_sample(LiveSample(
+            "twin", {"timestamp": 0.0, "voltage": 3.3}, axis_kind="sequence",
+        ))
+        buf.clear()
+        buf.add_sample(_twin_sample(0.0))
+        buf.add_sample(_ecu_sample(0.0))
+        twin_lr, _ = buf.build_results()
+        assert twin_lr.axis_kind == "timestamp"

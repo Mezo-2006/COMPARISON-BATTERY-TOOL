@@ -47,6 +47,18 @@ Timestamp normalisation
 
 After normalisation the ``timestamp`` column is float64 seconds and the
 DataFrame is sorted ascending by it.
+
+Sequence-id axis
+-----------------
+A header literally named ``id`` is accepted as the timestamp column (see
+the alias table above) but means something different: it's a plain
+integer sample counter, not a time value (this is what
+``synthetic_data_generator``'s ``id_mode="sequence"`` emits). The loader
+still stores these values in the same ``timestamp`` column internally
+(alignment/statistics only need a sortable, interpolatable numeric axis
+and don't care what it represents) but records which kind it was on
+``LoadResult.axis_kind`` (``"timestamp"`` or ``"sequence"``) so the
+Graphs tab can label the X axis correctly either way.
 """
 
 from __future__ import annotations
@@ -110,6 +122,13 @@ class LoadResult:
     source_columns: List[str]                 # original CSV header names
     time_range: Tuple[float, float]           # (t_min, t_max) in seconds
     warnings: List[str] = field(default_factory=list)
+    # What the "timestamp" column actually *means*: "timestamp" for a real
+    # time axis (seconds or Unix ms), "sequence" when the source column was
+    # literally named "id" (a plain sample counter, no time semantics).
+    # Determined once, from which alias matched during column resolution --
+    # see ``_resolve_columns`` -- and carried through alignment so the
+    # Graphs tab can label/scale the X axis correctly for either.
+    axis_kind: str = "timestamp"
 
     @property
     def has_timestamp(self) -> bool:
@@ -192,6 +211,15 @@ def load_csv(path: str, source_label: str) -> LoadResult:
             f"Accepted aliases: {_ALIAS_MAP['timestamp']}"
         )
 
+    # Which original header won the "timestamp" slot? If it was literally
+    # "id", this run's primary axis is a sequence counter, not real time
+    # (see synthetic_data_generator's id_mode) -- record that now, before
+    # the rename below erases the original header name.
+    ts_original = next(
+        orig for orig, canon in canonical_map.items() if canon == "timestamp"
+    )
+    axis_kind = "sequence" if ts_original.strip().lower() == "id" else "timestamp"
+
     # Rename to canonical names, keep only recognised columns
     rename_dict = {orig: canon for orig, canon in canonical_map.items()}
     df = df.rename(columns=rename_dict)
@@ -257,6 +285,7 @@ def load_csv(path: str, source_label: str) -> LoadResult:
         source_label=source_label,
         source_columns=original_columns,
         warnings=warnings,
+        axis_kind=axis_kind,
     )
 
 
@@ -268,6 +297,7 @@ def build_load_result(
     source_label: str,
     source_columns: List[str],
     warnings: Optional[List[str]] = None,
+    axis_kind: str = "timestamp",
 ) -> LoadResult:
     """Assemble a ``LoadResult`` from an already-clean DataFrame.
 
@@ -294,6 +324,10 @@ def build_load_result(
     warnings
         Optional list of warning strings collected during cleaning.
         Defaults to a fresh empty list.
+    axis_kind
+        ``"timestamp"`` (default) for a real time axis, or ``"sequence"``
+        when the primary column is a plain sample counter (the live
+        accumulator passes this through from ``LiveSample.axis_kind``).
 
     Returns
     -------
@@ -317,6 +351,7 @@ def build_load_result(
         source_columns=source_columns,
         time_range=(t_min, t_max),
         warnings=list(warnings) if warnings else [],
+        axis_kind=axis_kind,
     )
 def _resolve_columns(original: list[str]) -> tuple[dict[str, str], list[str]]:
     """Map original header → canonical name.
@@ -349,15 +384,20 @@ def _resolve_columns(original: list[str]) -> tuple[dict[str, str], list[str]]:
                 used_canonical.add(canon)
                 break
 
-    # Special rule for single-letter ``t``
-    if "t" in lower_to_original and "timestamp" not in used_canonical \
-       and "temperature" not in used_canonical:
+    # Special rule for single-letter ``t``. Note the "temperature already
+    # used" check only guards the *temperature* branch below (to avoid
+    # mapping two original columns onto the same canonical "temperature"
+    # slot when an unambiguous column like "temp" already claimed it) --
+    # it must NOT gate the whole rule, or an unrelated "Temperature"
+    # column (its own unambiguous alias, nothing to do with "t") would
+    # incorrectly block "t" from becoming timestamp when "v" is present.
+    if "t" in lower_to_original and "timestamp" not in used_canonical:
         # ``t`` + ``v`` present → treat ``t`` as timestamp (common twin
         # layout), otherwise treat ``t`` as temperature.
         if "v" in lower_to_original:
             canonical_map[lower_to_original["t"]] = "timestamp"
             used_canonical.add("timestamp")
-        else:
+        elif "temperature" not in used_canonical:
             canonical_map[lower_to_original["t"]] = "temperature"
             used_canonical.add("temperature")
 

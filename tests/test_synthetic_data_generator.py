@@ -13,10 +13,14 @@ import json
 import numpy as np
 import pytest
 
+import time
+
 from synthetic_data_generator import (
     GeneratorConfig,
     SyntheticBatteryGenerator,
     batch_to_json_bytes,
+    ID_MODE_SEQUENCE,
+    ID_MODE_TIMESTAMP,
 )
 from live_schema import parse_message
 
@@ -189,3 +193,80 @@ class TestSchemaCompliance:
         twin_payload, ecu_payload = gen.batch(3)
         json.loads(batch_to_json_bytes(twin_payload))
         json.loads(batch_to_json_bytes(ecu_payload))
+
+
+# ---------------------------------------------------------------------------
+# id_mode: "sequence" (default) vs "timestamp"
+# ---------------------------------------------------------------------------
+class TestIdMode:
+    def test_default_id_mode_is_sequence(self):
+        assert GeneratorConfig().id_mode == ID_MODE_SEQUENCE
+
+    def test_sequence_mode_start_id_customizable(self):
+        gen = SyntheticBatteryGenerator(
+            GeneratorConfig(seed=1, id_mode=ID_MODE_SEQUENCE, start_id=100)
+        )
+        twin_payload, ecu_payload = gen.batch(3)
+        ids = [s["id"] for s in twin_payload["samples"]]
+        assert ids == [100, 101, 102]
+        # twin and ecu share the same sequence id for a given logical step.
+        assert [s["id"] for s in ecu_payload["samples"]] == ids
+
+    def test_timestamp_mode_emits_timestamp_not_id(self):
+        gen = SyntheticBatteryGenerator(
+            GeneratorConfig(seed=1, id_mode=ID_MODE_TIMESTAMP)
+        )
+        twin_payload, ecu_payload = gen.batch(3)
+        for payload in (twin_payload, ecu_payload):
+            for sample in payload["samples"]:
+                assert "timestamp" in sample
+                assert "id" not in sample
+
+    def test_timestamp_mode_values_are_unix_ms_scale(self):
+        before_ms = time.time() * 1000.0
+        gen = SyntheticBatteryGenerator(
+            GeneratorConfig(seed=1, id_mode=ID_MODE_TIMESTAMP)
+        )
+        twin_payload, _ = gen.batch(1)
+        after_ms = time.time() * 1000.0
+        ts = twin_payload["samples"][0]["timestamp"]
+        # Constructed "now", give or take test execution slack -- nowhere
+        # near a small sequence counter's magnitude (0, 1, 2, ...).
+        assert before_ms - 1000 <= ts <= after_ms + 1000
+
+    def test_timestamp_mode_advances_by_dt_seconds_in_ms(self):
+        gen = SyntheticBatteryGenerator(
+            GeneratorConfig(seed=1, id_mode=ID_MODE_TIMESTAMP, dt=0.2)
+        )
+        twin_payload, _ = gen.batch(3)
+        ts = [s["timestamp"] for s in twin_payload["samples"]]
+        assert ts[1] - ts[0] == pytest.approx(200.0, abs=1e-6)
+        assert ts[2] - ts[1] == pytest.approx(200.0, abs=1e-6)
+
+    def test_timestamp_mode_ecu_offset_from_twin(self):
+        gen = SyntheticBatteryGenerator(
+            GeneratorConfig(seed=1, id_mode=ID_MODE_TIMESTAMP, ecu_time_offset=0.05)
+        )
+        twin_payload, ecu_payload = gen.batch(1)
+        twin_ts = twin_payload["samples"][0]["timestamp"]
+        ecu_ts = ecu_payload["samples"][0]["timestamp"]
+        assert ecu_ts - twin_ts == pytest.approx(50.0, abs=1e-6)  # 0.05 s -> 50 ms
+
+    def test_timestamp_mode_parses_with_timestamp_axis_kind(self):
+        gen = SyntheticBatteryGenerator(
+            GeneratorConfig(seed=1, id_mode=ID_MODE_TIMESTAMP)
+        )
+        twin_payload, _ = gen.batch(2)
+        samples = parse_message(
+            "bms/twin/data", batch_to_json_bytes(twin_payload), TWIN_ROOT, ECU_ROOT,
+        )
+        assert all(s.axis_kind == "timestamp" for s in samples)
+        assert all(s.id is None for s in samples)  # no dedup id in this mode
+
+    def test_sequence_mode_parses_with_sequence_axis_kind(self):
+        gen = SyntheticBatteryGenerator(GeneratorConfig(seed=1))
+        twin_payload, _ = gen.batch(2)
+        samples = parse_message(
+            "bms/twin/data", batch_to_json_bytes(twin_payload), TWIN_ROOT, ECU_ROOT,
+        )
+        assert all(s.axis_kind == "sequence" for s in samples)

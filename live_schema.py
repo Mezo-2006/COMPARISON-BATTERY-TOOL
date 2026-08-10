@@ -44,6 +44,12 @@ Timestamp (``t`` / ``time`` / ``timestamp`` / ...) is mandatory per
 sample. Every other signal is optional; the accumulator simply records
 ``NaN`` for any signal a sample doesn't carry.
 
+A sample with **no** time-like key but an ``id`` key is also accepted —
+the ``id`` value fills the timestamp slot, and the sample is flagged
+``axis_kind="sequence"`` (see :class:`LiveSample`) so downstream code
+knows it's a plain counter, not a time value. This is what
+``synthetic_data_generator``'s ``id_mode="sequence"`` publishes.
+
 
 Deduplication id (QoS 1)
 ------------------------
@@ -140,12 +146,20 @@ class LiveSample:
         carries no id key, in which case the accumulator falls back to
         timestamp-based dedup.  The id is stored as a string so int and
         str ids from different publishers don't collide on dtype.
+    axis_kind
+        ``"timestamp"`` when ``columns["timestamp"]`` came from a real
+        time-like key (``t``/``time``/``timestamp``/...), or
+        ``"sequence"`` when it came from a payload that carried *only* an
+        ``id`` key (no time-like key at all) -- i.e. a plain sample
+        counter, not a time value. See ``data_loader``'s "Sequence-id
+        axis" note; this is the live-mode counterpart.
     """
 
     source_label: str
     columns: Dict[str, float]
     source_keys: List[str] = field(default_factory=list)
     id: Optional[str] = None
+    axis_kind: str = "timestamp"
 
     @property
     def timestamp(self) -> float:
@@ -230,7 +244,7 @@ def _topic_matches(topic: str, root: str) -> bool:
 # ---------------------------------------------------------------------------
 def _resolve_sample_columns(
     sample: Dict[str, Any],
-) -> Dict[str, float]:
+) -> "tuple[Dict[str, float], str]":
     """Normalise one JSON-sample dict into canonical column → value.
 
     Mirrors ``data_loader._resolve_columns`` but for a single dict: each
@@ -244,6 +258,13 @@ def _resolve_sample_columns(
     :class:`LiveSchemaError` on failure); any other signal that fails to
     coerce becomes ``NaN`` so the accumulator can still receive the
     timestamp + other valid signals of the same sample.
+
+    Returns
+    -------
+    (columns, axis_kind)
+        ``axis_kind`` is ``"sequence"`` when the timestamp slot was
+        filled by the ``id`` fallback (no real time-like key present),
+        else ``"timestamp"``.
     """
     lower_to_original: Dict[str, str] = {}
     for k in sample:
@@ -267,19 +288,26 @@ def _resolve_sample_columns(
     # generalised to "any voltage alias matched" rather than only ``v``):
     #   - if a voltage signal was found via any alias, ``t`` is the
     #     timestamp (the common twin layout);
-    #   - otherwise ``t`` is temperature.
-    if "t" in lower_to_original and "timestamp" not in used \
-       and "temperature" not in used:
+    #   - otherwise ``t`` is temperature, unless "temperature" was already
+    #     claimed by a real key (e.g. "temp") -- then "t" is left unclaimed
+    #     rather than mapped onto an already-used canonical slot. This
+    #     "temperature" check must only guard the temperature branch, not
+    #     gate the whole rule, or an unrelated temperature key would
+    #     incorrectly block "t" from becoming timestamp when voltage is
+    #     present.
+    if "t" in lower_to_original and "timestamp" not in used:
         if "voltage" in used:
             canonical_map["timestamp"] = lower_to_original["t"]
             used.add("timestamp")
-        else:
+        elif "temperature" not in used:
             canonical_map["temperature"] = lower_to_original["t"]
             used.add("temperature")
 
+    axis_kind = "timestamp"
     if "timestamp" not in used and "id" in lower_to_original:
         canonical_map["timestamp"] = lower_to_original["id"]
         used.add("timestamp")
+        axis_kind = "sequence"
 
     out: Dict[str, float] = {}
 
@@ -289,7 +317,7 @@ def _resolve_sample_columns(
             "Sample has no timestamp field. Accepted keys: "
             f"{_ALIAS_MAP['timestamp']}"
         )
-        return out  # unreachable; satisfies type-checkers
+        return out, axis_kind  # unreachable; satisfies type-checkers
 
     t_raw = sample[canonical_map["timestamp"]]
     try:
@@ -312,7 +340,7 @@ def _resolve_sample_columns(
         except (TypeError, ValueError):
             v = float("nan")
         out[canon] = v
-    return out
+    return out, axis_kind
 
 
 # ---------------------------------------------------------------------------
@@ -393,13 +421,14 @@ def parse_message(
 
 def _build_sample(source_label: str, sample: Dict[str, Any]) -> LiveSample:
     """Build one ``LiveSample`` from a single-sample dict."""
-    columns = _resolve_sample_columns(sample)
+    columns, axis_kind = _resolve_sample_columns(sample)
     sample_id = _resolve_id(sample)
     return LiveSample(
         source_label=source_label,
         columns=columns,
         source_keys=list(sample.keys()),
         id=sample_id,
+        axis_kind=axis_kind,
     )
 
 

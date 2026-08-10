@@ -72,6 +72,14 @@ _THRESHOLD_LINE_COLOUR = (255, 140, 0)   # amber
 _EXCEEDANCE_COLOUR     = (211, 47, 47)   # red
 _EXCEEDANCE_FILL       = (211, 47, 47, 60)
 
+# Bottom-axis label, keyed by ``AlignedData.axis_kind`` — "sequence" for a
+# plain sample counter (no time units at all), "timestamp" for real time
+# (offline: whatever unit the file uses; live: Unix ms).
+_AXIS_LABELS = {
+    "sequence": "Sample ID",
+    "timestamp": "Time (offline: file units; live: Unix ms)",
+}
+
 # (enabled, value) per signal, as read from the Config tab.
 ThresholdSpec = Tuple[bool, float]
 
@@ -147,12 +155,14 @@ class PlotManager:
         live_window_ms
             When given (live mode only), every plot is pinned to a
             sliding ``[latest_t - live_window_ms, latest_t]`` X range
-            (Unix epoch milliseconds — the live pipeline's wire timestamp
-            unit) instead of auto-fitting every accumulated sample. See
-            ``back.py``'s ``_LIVE_PLOT_WINDOW_MS`` for why. ``None`` (the
-            offline default) leaves pyqtgraph's normal auto-range
-            behaviour in place so a finished run's full time range is
-            visible.
+            instead of auto-fitting every accumulated sample. Despite the
+            name, this is in whatever unit ``aligned.axis_kind`` is —
+            Unix epoch milliseconds for ``"timestamp"``, a sample count
+            for ``"sequence"`` — ``back.py`` picks the right one before
+            calling in. See ``back.py``'s ``_LIVE_PLOT_WINDOW_MS`` /
+            ``_LIVE_PLOT_WINDOW_SEQUENCE`` for why. ``None`` (the offline
+            default) leaves pyqtgraph's normal auto-range behaviour in
+            place so a finished run's full time range is visible.
         """
         thresholds = thresholds or {}
         if enabled_signals is None:
@@ -249,7 +259,7 @@ class PlotManager:
                   name="ECU")
 
         plot.setLabel("left", signal_name.title())
-        plot.setLabel("bottom", "Time (offline: file units; live: Unix ms)")
+        plot.setLabel("bottom", _AXIS_LABELS.get(aligned.axis_kind, _AXIS_LABELS["timestamp"]))
 
         self._apply_threshold(plot, label, signal_name, t_win, ecu_v,
                               threshold)
@@ -344,7 +354,7 @@ class PlotManager:
                                                    style=Qt_PenStyle_Dash(),
                                                    width=1.0)))
         plot.setLabel("left", "Error (ECU − Twin)")
-        plot.setLabel("bottom", "Time (offline: file units; live: Unix ms)")
+        plot.setLabel("bottom", _AXIS_LABELS.get(aligned.axis_kind, _AXIS_LABELS["timestamp"]))
 
 
 # ---------------------------------------------------------------------------

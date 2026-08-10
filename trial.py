@@ -17,7 +17,10 @@ import sys
 from PyQt5 import QtCore, QtWidgets
 
 from mqtt_worker import MqttWorker
-from synthetic_data_generator import GeneratorConfig, SyntheticBatteryGenerator, batch_to_json_bytes
+from synthetic_data_generator import (
+    GeneratorConfig, SyntheticBatteryGenerator, batch_to_json_bytes,
+    ID_MODE_SEQUENCE, ID_MODE_TIMESTAMP,
+)
 
 
 class TrialWindow(QtWidgets.QWidget):
@@ -57,6 +60,15 @@ class TrialWindow(QtWidgets.QWidget):
         self.seed_spin = QtWidgets.QSpinBox()
         self.seed_spin.setRange(0, 2_147_483_647)
         self.seed_spin.setValue(42)
+        self.id_mode_combo = QtWidgets.QComboBox()
+        self.id_mode_combo.addItem("Sequence (id counter)", ID_MODE_SEQUENCE)
+        self.id_mode_combo.addItem("Timestamp (Unix ms)", ID_MODE_TIMESTAMP)
+        self.id_mode_combo.setCurrentIndex(0)  # sequence is the default
+        self.start_id_spin = QtWidgets.QSpinBox()
+        self.start_id_spin.setRange(0, 2_147_483_647)
+        self.start_id_spin.setValue(0)
+        self.start_id_spin.setToolTip("Sequence mode only: first sample id.")
+        self.id_mode_combo.currentIndexChanged.connect(self._on_id_mode_changed)
         self.dt_spin = QtWidgets.QDoubleSpinBox()
         self.dt_spin.setRange(0.001, 10.0)
         self.dt_spin.setDecimals(3)
@@ -80,6 +92,8 @@ class TrialWindow(QtWidgets.QWidget):
         form.addRow("ECU topic", self.ecu_topic_edit)
         form.addRow("QoS", self.qos_combo)
         form.addRow("Seed", self.seed_spin)
+        form.addRow("Primary field", self.id_mode_combo)
+        form.addRow("Start id", self.start_id_spin)
         form.addRow("dt (s)", self.dt_spin)
         form.addRow("Batch size", self.batch_size_spin)
         form.addRow("Interval (ms)", self.interval_spin)
@@ -105,6 +119,13 @@ class TrialWindow(QtWidgets.QWidget):
         layout.addWidget(self.status_label)
         layout.addWidget(self.log_view)
 
+        self._on_id_mode_changed()  # sync start_id's enabled state at startup
+
+    def _on_id_mode_changed(self) -> None:
+        """Start id only means anything in sequence mode -- grey it out otherwise."""
+        is_sequence = self.id_mode_combo.currentData() == ID_MODE_SEQUENCE
+        self.start_id_spin.setEnabled(is_sequence)
+
     def _log(self, msg: str) -> None:
         self.log_view.appendPlainText(msg)
 
@@ -118,7 +139,12 @@ class TrialWindow(QtWidgets.QWidget):
         self._batches_sent = 0
 
         self._gen = SyntheticBatteryGenerator(
-            GeneratorConfig(seed=self.seed_spin.value(), dt=self.dt_spin.value())
+            GeneratorConfig(
+                seed=self.seed_spin.value(),
+                dt=self.dt_spin.value(),
+                id_mode=self.id_mode_combo.currentData(),
+                start_id=self.start_id_spin.value(),
+            )
         )
 
         self._thread = QtCore.QThread()
@@ -159,7 +185,7 @@ class TrialWindow(QtWidgets.QWidget):
         self.status_label.setText("Connected — publishing")
         self._log(
             f"connected to {self.host_edit.text()}:{self.port_spin.value()}  "
-            f"seed={self.seed_spin.value()}"
+            f"seed={self.seed_spin.value()}  id_mode={self.id_mode_combo.currentData()}"
         )
         self._timer.setInterval(self.interval_spin.value())
         self._timer.start()
