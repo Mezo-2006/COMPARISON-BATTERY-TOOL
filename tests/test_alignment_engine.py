@@ -321,13 +321,12 @@ def test_align_by_id_overrides_nearest_timestamp_when_ranges_overlap(
     )
 
 
-def test_align_by_id_partial_fallback_unmatched_row_marked_nan(
-    make_load_result,
-):
+def test_align_by_id_unmatched_ecu_id_marked_nan(make_load_result):
     """Some ECU ids match a twin row, some don't. The matched ones pair
-    by id; the unmatched one falls back to nearest-timestamp and, since
-    its timestamp is outside the twin range, gets NaN'd and counted as
-    unmatched."""
+    by id; the unmatched one (its twin id isn't in the buffer yet, or is
+    genuinely missing) is left NaN — NOT timestamp-matched to a wrong
+    twin — and counted as unmatched. A late twin id will pair it on a
+    future tick (see ``test_align_unmatched_ecu_waits_for_twin_id``)."""
     twin = make_load_result(
         "twin",
         {"timestamp": [0.0, 100.0, 200.0],
@@ -371,9 +370,10 @@ def test_align_by_id_no_match_and_no_overlap_still_raises(make_load_result):
         align(twin, ecu, ALIGN_NEAREST)
 
 
-def test_align_by_id_ignores_null_ids(make_load_result):
-    """ECU rows with a null id must fall back to nearest-timestamp
-    matching, not crash or be silently dropped."""
+def test_align_by_id_null_ecu_id_unmatched(make_load_result):
+    """An ECU row whose own ``id`` is null while ids are otherwise in
+    use has no id to pair by, so it is left unmatched (NaN) rather than
+    timestamp-matched to a wrong twin. Matched rows still pair by id."""
     twin = make_load_result(
         "twin",
         {"timestamp": [0.0, 100.0],
@@ -384,14 +384,65 @@ def test_align_by_id_ignores_null_ids(make_load_result):
         "ecu",
         {"timestamp": [105.0, 600.0],
          "voltage": [3.41, 9.99],
-         "id": ["2", None]},   # first matches by id; second falls back
+         "id": ["2", None]},   # first matches by id; second has no id
     )
     aligned = align(twin, ecu, ALIGN_NEAREST)
     # ECU id "2" (@ ts 105) -> twin idx 1 (v 3.40 @ ts 100), error 0.01.
     np.testing.assert_allclose(aligned.signals["voltage"].twin_values[0], 3.40)
-    # ECU ts 600 with null id -> fallback, outside twin range -> NaN.
+    # ECU row with null id -> unmatched -> NaN.
     assert np.isnan(aligned.signals["voltage"].twin_values[1])
     assert aligned.n_matched == 1
+
+
+def test_align_unmatched_ecu_waits_for_twin_id(make_load_result):
+    """The regression guard for the user's bug: an ECU row whose id has
+    no twin counterpart in the buffer yet must stay NaN (NOT get
+    timestamp-matched to a wrong twin). When the twin id later arrives
+    within the buffer window, the same ECU row pairs exactly — the
+    controller's next ``_tick`` re-runs ``align()`` and resolves it.
+
+    The ECU s3 sample is deliberately placed at ts=210 (right next to
+    twin s2 @ ts=200) so that WITHOUT the fix the old timestamp
+    fallback would match it to twin s2 (gap 10 < 2×100) and emit a
+    WRONG pair; with the fix it stays NaN until twin s3 arrives."""
+    # --- Phase A: twin knows s0,s1,s2; ECU has s0,s1,s3 (s3's twin
+    # not arrived yet). ECU s3 must be NaN, not twin s2's value. ---
+    twin_a = make_load_result(
+        "twin",
+        {"timestamp": [0.0, 100.0, 200.0],
+         "voltage": [3.30, 3.40, 3.50],
+         "id": ["s0", "s1", "s2"]},
+    )
+    ecu = make_load_result(
+        "ecu",
+        {"timestamp": [10.0, 110.0, 210.0],
+         "voltage": [9.99, 9.99, 9.99],
+         "id": ["s0", "s1", "s3"]},
+    )
+    aligned_a = align(twin_a, ecu, ALIGN_NEAREST)
+    assert aligned_a.n_matched == 2
+    np.testing.assert_allclose(
+        aligned_a.signals["voltage"].twin_values[:2], [3.30, 3.40],
+    )
+    # The crucial guard: ECU s3 is NaN, NOT the nearest-in-time twin
+    # value (3.50 from twin s2 @200) that the old fallback would give.
+    assert np.isnan(aligned_a.signals["voltage"].twin_values[2])
+    assert np.nan != 3.50  # sanity (the old wrong match would be 3.50)
+
+    # --- Phase B: twin s3 arrives (still inside the buffer window).
+    # The same ECU rows now align by id, s3 included. ---
+    twin_b = make_load_result(
+        "twin",
+        {"timestamp": [0.0, 100.0, 200.0, 220.0],
+         "voltage": [3.30, 3.40, 3.50, 3.60],
+         "id": ["s0", "s1", "s2", "s3"]},
+    )
+    aligned_b = align(twin_b, ecu, ALIGN_NEAREST)
+    assert aligned_b.n_matched == 3
+    np.testing.assert_allclose(
+        aligned_b.signals["voltage"].twin_values,
+        [3.30, 3.40, 3.60],   # ECU s3 -> twin s3 (v 3.60), not twin s2
+    )
 
 
 def test_align_by_id_offline_no_id_column_unchanged(twin_result_five,

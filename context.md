@@ -350,23 +350,26 @@ timestamp + other valid signals still get recorded).
 ### 6.5 Id-aware alignment — robustness to delivery shifts
 
 When both twin and ECU snapshots carry an `id` column (the live path
-with QoS-1 dedup, §6.3), `alignment_engine.align()` pairs each ECU row
-to the twin row sharing its `id` **before** falling back to
-nearest-timestamp matching. This resolves a *delivery shift* between
-the two streams exactly: a twin sample and an ECU sample produced for
-the same logical instant may arrive with different wall-clock
-timestamps (one path lagging), but matching them by `id` sidesteps the
-shift and the misleading "gap is bigger than threshold" warning it
-used to produce. ECU rows whose `id` has no twin counterpart fall back
-to the existing nearest-timestamp path (with the 2× twin-period NaN
-heuristic for out-of-range samples).
+with QoS-1 dedup, §6.3), `alignment_engine.align()` makes `id` the
+**sole pairing key**: each ECU row is paired to the twin row sharing
+its `id` exactly. This resolves a *delivery shift* between the two
+streams exactly — a twin sample and an ECU sample produced for the
+same logical instant may arrive with different wall-clock timestamps
+(one path lagging), but matching by `id` sidesteps the shift and the
+misleading "gap is bigger than threshold" warning it used to produce.
 
-The controller's periodic `_tick` (§5.2) re-runs `align()` every
+ECU rows whose `id` has no twin counterpart are left **unmatched
+(NaN)** — NOT timestamp-matched to a wrong twin while waiting. The
+controller's periodic `_tick` (§5.2) re-runs `align()` every
 `interval_ms` on a fresh snapshot, and the ring buffer (§7) retains up
-to `max_age_ms` / `max_rows` of history — so a late `id` only has to
-arrive within the buffer window to be paired on the next tick. There is
-no per-sample "waiting" or re-queue machinery; the existing
-tick-and-re-align cadence is the mechanism.
+to `max_age_ms` / `max_rows` of history — so the matching twin `id`
+only has to arrive within the buffer window to be paired on the next
+tick. There is no per-sample "waiting" or re-queue machinery; a late
+id is *waited for* by being NaN this tick and matched the next. An ECU
+row whose own `id` is null while ids are otherwise in use is also
+unmatched (no id to pair by). Timestamp matching is used ONLY when
+`plan` is `None` — i.e. offline CSVs that never carry `id`, or a live
+stream that omits ids entirely.
 
 The "no time-range overlap" fatal `AlignmentError` is **gated on id
 availability**: when ids are present it is skipped up front and
@@ -380,10 +383,13 @@ Wall-clock deltas for **id-matched** pairs are excluded from
 `AlignedData.max_delta_t` and therefore do not trip the
 `_MAX_DELTA_T_WARN_MS` "alignment may be unreliable" warning — an
 id-matched pair's timestamp delta is a delivery shift, not an
-alignment-quality signal. Only fallback (non-id-matched) deltas count.
-Offline runs (no `id` column → all pairs are fallback) behave
-identically to before; the 14 original `test_alignment_engine` tests
-are unchanged.
+alignment-quality signal. In pure id-mode no timestamp gaps are
+measured at all (unmatched rows carry delta 0), so the gap warning
+never fires; alignment quality is reported via `n_matched` /
+`n_matched` / `n_total` and the "could not be matched" warning for
+unmatched rows. Offline runs (no `id` column → all pairs are
+timestamp-matched) behave identically to before; the 14 original
+`test_alignment_engine` tests are unchanged.
 
 ---
 

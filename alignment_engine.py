@@ -25,17 +25,18 @@ row gets a matched twin value (nearest or interpolated).
 
 Design note (id-aware matching, live path): when both ``LoadResult``s
 carry a publisher ``id`` column (the live MQTT path with QoS-1 dedup),
-each ECU row is first paired to the twin row sharing its ``id``.  This
-resolves a *delivery shift* between the two streams exactly — a twin
-sample and an ECU sample produced for the same logical instant may
-arrive with different wall-clock timestamps, but matching them by id
-sidesteps the shift.  The matching id only has to land in the ring
-buffer before ``max_age_ms`` / ``max_rows`` trims it (see
-``live_accumulator``); the controller's periodic tick re-runs
-``align()`` so a late id is picked up on the next tick.  ECU rows with
-no matching twin id fall back to the nearest-timestamp match below.
-Offline CSVs never carry an ``id`` column, so the id-aware branch is a
-no-op there and the pure-timestamp behaviour is unchanged.
+``id`` is the SOLE pairing key — each ECU row is paired to the twin row
+sharing its ``id`` exactly.  ECU rows whose ``id`` has no twin
+counterpart are left UNMATCHED (NaN) rather than timestamp-matched to a
+wrong twin: the matching twin ``id`` only has to land in the ring buffer
+before ``max_age_ms`` / ``max_rows`` trims it, and the controller's
+periodic ``_tick`` re-runs ``align()`` so the late id is paired on the
+next tick.  This resolves a *delivery shift* between the two streams
+exactly — a twin sample and an ECU sample produced for the same logical
+instant may arrive with different wall-clock timestamps (one path
+lagging), but matching by id sidesteps the shift.  Offline CSVs never
+carry an ``id`` column, so the id-aware branch is a no-op there and the
+pure-timestamp behaviour is unchanged.
 
 This module is **pure Python** — no Qt imports — so it can be unit-tested
 in isolation with small DataFrames.
@@ -223,11 +224,12 @@ def align(
         )
 
     # --- Align each signal -------------------------------------------------
-    # The ECU timestamps are the reference timeline.  For each ECU
-    # timestamp we find the corresponding twin value (by id when a
-    # match_plan entry exists, else nearest or interpolated).  ECU
-    # samples with no id match and outside the twin's time range get
-    # NaN for the twin side so the StatisticsEngine skips them.
+    # The ECU timestamps are the reference timeline.  For each ECU row:
+    # when ids are in use (match_plan not None), pair by id exactly and
+    # leave rows with no twin id as NaN (unmatched — the twin id only
+    # has to land within the ring-buffer window to pair on the next
+    # tick); otherwise (no ids on either side, or interpolation) fall
+    # back to nearest-timestamp matching with the 2× period NaN rule.
     signals: Dict[str, AlignedSignal] = {}
     max_delta_t = 0.0
 
@@ -344,72 +346,81 @@ def _align_nearest(
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """For each ECU sample, find the matching twin sample.
 
-    When ``match_plan`` is provided, ECU rows whose plan entry is ``>= 0``
-    are paired directly to that twin row *by id* — these are the same
-    logical sample arriving at a different wall-clock time, so the twin
-    value is taken exactly and is never NaN'd.  ECU rows whose plan
-    entry is ``-1`` (no matching twin id, or ids not in use at all) fall
-    back to nearest-timestamp matching with the 2× median-period NaN
-    heuristic.  When ``match_plan`` is ``None`` (offline CSV path, or a
-    live stream that omits ids) every ECU row takes the fallback path —
-    identical to the historical behaviour.
+    When ``match_plan`` is provided (live path with ids on both sides),
+    ``id`` is the SOLE pairing key: ECU rows whose plan entry is ``>= 0``
+    pair exactly to that twin row by id.  ECU rows with ``-1`` (the twin
+    id hasn't arrived yet, or the row's own id is null) are left
+    UNMATCHED (NaN), NOT timestamp-matched to a wrong twin — the
+    controller's next ``_tick`` re-runs ``align()`` on a fresh
+    snapshot, so the twin id only has to land within the ring-buffer
+    window (``live_accumulator``'s ``max_age_ms`` / ``max_rows``) to be
+    paired on the following tick.  A late id is *waited for* by being
+    NaN this tick and matched the next; it is never forced into a wrong
+    timestamp match in the meantime.
+
+    When ``match_plan`` is ``None`` (offline CSVs, or a live stream that
+    omits ids entirely) every ECU row takes the nearest-timestamp path
+    with the 2× median-period NaN heuristic — identical to the
+    historical behaviour.
 
     Returns ``(aligned_twin_values, deltas, id_matched_mask)`` where
-    ``deltas[i]`` is ``abs(ecu_ts[i] - twin_ts[matched_index])`` and
-    ``id_matched_mask[i]`` is ``True`` iff row ``i`` was paired by id.
-    The caller uses ``id_matched_mask`` to exclude id-matched wall-clock
-    gaps from the alignment-quality ("gap too large") warning.
+    ``deltas[i]`` is ``abs(ecu_ts[i] - twin_ts[matched_index])`` (0 for
+    unmatched id-mode rows, since there is no match to measure a gap
+    against) and ``id_matched_mask[i]`` is ``True`` iff row ``i`` was
+    paired by id.  The caller uses ``id_matched_mask`` to exclude
+    id-matched wall-clock gaps (delivery shifts) from the
+    alignment-quality gap warning.
     """
     n = len(ecu_ts)
-    aligned_twin = np.empty(n, dtype=np.float64)
+    # Initialise to NaN so unmatched id-mode rows are correctly "no
+    # match" without any extra bookkeeping (the no-id path overwrites
+    # every element below).
+    aligned_twin = np.full(n, np.nan, dtype=np.float64)
     deltas = np.zeros(n, dtype=np.float64)
     id_matched_mask = np.zeros(n, dtype=bool)
 
     if match_plan is not None:
+        # Id-mode: id is the only pairing key.  Matched rows take their
+        # twin's value exactly; rows with no twin id stay NaN and wait
+        # for the twin id on a future tick.  No timestamp fallback.
         id_rows = match_plan >= 0
         if id_rows.any():
             twin_idx = match_plan[id_rows]
             aligned_twin[id_rows] = twin_vals[twin_idx]
             deltas[id_rows] = np.abs(ecu_ts[id_rows] - twin_ts[twin_idx])
             id_matched_mask[id_rows] = True
-        fallback_mask = ~id_rows
+        return aligned_twin, deltas, id_matched_mask
+
+    # No-id fallback (offline CSVs, or live-without-ids): nearest twin
+    # by timestamp, NaN when the gap exceeds 2× the twin median period.
+    # ``np.searchsorted(twin_ts, ecu_ts, side='left')`` gives, for each
+    # ECU timestamp, the insertion point that keeps twin_ts sorted.  The
+    # nearest twin sample is either at that index or the one before it.
+    indices = np.searchsorted(twin_ts, ecu_ts, side="left")
+
+    # Clamp to valid twin indices [0, len-1] so ECU timestamps outside
+    # the twin range are matched to the edge sample.
+    indices_left = np.clip(indices - 1, 0, len(twin_ts) - 1)
+    indices_right = np.clip(indices, 0, len(twin_ts) - 1)
+
+    # Choose the closer of the two candidates for each ECU timestamp.
+    delta_left = np.abs(ecu_ts - twin_ts[indices_left])
+    delta_right = np.abs(ecu_ts - twin_ts[indices_right])
+    choose_right = delta_right < delta_left
+    nearest_indices = np.where(choose_right, indices_right, indices_left)
+    deltas = np.where(choose_right, delta_right, delta_left)
+    aligned_twin = twin_vals[nearest_indices].astype(np.float64)
+
+    # Mark fallback ECU samples that fall outside the twin's time range
+    # as NaN so they are not counted as "matched" by the
+    # StatisticsEngine.  Heuristic: a gap exceeding 2× the twin's
+    # median sample period is treated as unmatched.
+    if len(twin_ts) > 1:
+        twin_period = float(np.median(np.diff(twin_ts)))
     else:
-        fallback_mask = np.ones(n, dtype=bool)
-
-    if fallback_mask.any():
-        fb_ts = ecu_ts[fallback_mask]
-
-        # ``np.searchsorted(twin_ts, ecu_ts, side='left')`` gives, for each
-        # ECU timestamp, the insertion point that keeps twin_ts sorted.
-        # The nearest twin sample is either at that index or the one before.
-        indices = np.searchsorted(twin_ts, fb_ts, side="left")
-
-        # Clamp to valid twin indices [0, len-1] so ECU timestamps outside
-        # the twin range are matched to the edge sample.
-        indices_left = np.clip(indices - 1, 0, len(twin_ts) - 1)
-        indices_right = np.clip(indices, 0, len(twin_ts) - 1)
-
-        # Choose the closer of the two candidates for each ECU timestamp.
-        delta_left = np.abs(fb_ts - twin_ts[indices_left])
-        delta_right = np.abs(fb_ts - twin_ts[indices_right])
-        choose_right = delta_right < delta_left
-        nearest_indices = np.where(choose_right, indices_right, indices_left)
-        fb_deltas = np.where(choose_right, delta_right, delta_left)
-        fb_aligned = twin_vals[nearest_indices].astype(np.float64)
-
-        # Mark fallback ECU samples that fall outside the twin's time range
-        # as NaN so they are not counted as "matched" by the
-        # StatisticsEngine.  Heuristic: a gap exceeding 2× the twin's
-        # median sample period is treated as unmatched.
-        if len(twin_ts) > 1:
-            twin_period = float(np.median(np.diff(twin_ts)))
-        else:
-            twin_period = np.inf
-        outside_mask = fb_deltas > (2.0 * twin_period)
-        fb_aligned[outside_mask] = np.nan
-
-        aligned_twin[fallback_mask] = fb_aligned
-        deltas[fallback_mask] = fb_deltas
+        twin_period = np.inf
+    outside_mask = deltas > (2.0 * twin_period)
+    aligned_twin[outside_mask] = np.nan
 
     return aligned_twin, deltas, id_matched_mask
 

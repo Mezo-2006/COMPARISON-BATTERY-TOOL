@@ -390,3 +390,37 @@ class TestIdAwareAlignmentThroughBuffer:
         np.testing.assert_allclose(
             aligned2.signals["voltage"].errors, [0.01, 0.01, 0.01],
         )
+
+    def test_ecu_id_whose_twin_not_yet_arrived_stays_nan_then_pairs(self):
+        """The reverse direction: an ECU id whose TWIN counterpart
+        hasn't arrived yet must stay unmatched (NaN) — NOT get
+        timestamp-matched to a wrong twin while waiting. Once the twin
+        id arrives within the buffer window, the next snapshot pairs it
+        exactly. This is the regression guard for the user's bug."""
+        buf = LiveBuffer()
+        # Twin knows s0,s1,s2; ECU has s0,s1,s3 (s3's twin not here yet).
+        # ECU s3 at ts=210 sits right next to twin s2 @200 so the OLD
+        # timestamp fallback would wrongly match it to twin s2.
+        buf.add_sample(_twin_sample(t=0.0,   v=3.30, sample_id="s0"))
+        buf.add_sample(_twin_sample(t=100.0, v=3.40, sample_id="s1"))
+        buf.add_sample(_twin_sample(t=200.0, v=3.50, sample_id="s2"))
+        buf.add_sample(_ecu_sample(t=10.0,  v=9.99, sample_id="s0"))
+        buf.add_sample(_ecu_sample(t=110.0, v=9.99, sample_id="s1"))
+        buf.add_sample(_ecu_sample(t=210.0, v=9.99, sample_id="s3"))
+
+        twin_lr, ecu_lr = buf.build_results()
+        aligned = align(twin_lr, ecu_lr, ALIGN_NEAREST)
+        assert aligned.n_matched == 2
+        # Crucially: ECU s3 is NaN, not the nearest-in-time twin value
+        # (3.50 from twin s2 @200) the old fallback would produce.
+        assert np.isnan(aligned.signals["voltage"].twin_values[2])
+
+        # Twin s3 arrives within the buffer window -> next snapshot
+        # pairs ECU s3 with twin s3 exactly.
+        buf.add_sample(_twin_sample(t=220.0, v=3.60, sample_id="s3"))
+        twin_lr2, ecu_lr2 = buf.build_results()
+        aligned2 = align(twin_lr2, ecu_lr2, ALIGN_NEAREST)
+        assert aligned2.n_matched == 3
+        np.testing.assert_allclose(
+            aligned2.signals["voltage"].twin_values[2], 3.60,
+        )
