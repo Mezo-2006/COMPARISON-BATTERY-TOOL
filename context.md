@@ -102,7 +102,7 @@ All files live in `final_tool/`.
 Docs in `docs/` (per-module line-by-line explanations) and
 `high_lvl_explaination.md` (architecture overview).
 
-Tests in `tests/` — **202 pytest tests, all passing (~5-8s)**.
+Tests in `tests/` — **237 pytest tests, all passing (~4s)**.
 
 ---
 
@@ -320,7 +320,7 @@ Keys matched case-insensitively against `data_loader._ALIAS_MAP`
 ambiguity rule: `t` → timestamp if a voltage alias was found, else →
 temperature.
 
-### 6.3 Deduplication id (QoS 1)
+### 6.3 Deduplication id (QoS 1) + id-aware alignment
 
 MQTT QoS 1 = **at-least-once** → broker may redeliver. Each sample may
 carry an optional `id` (accepted keys: `id`, `seq`, `seq_id`, `msg_id`,
@@ -329,9 +329,14 @@ and str `"42"` from different publishers don't collide on pandas dtype.
 
 The accumulator dedupes by `id` with `keep="first"` (first delivery is
 real; redelivery dropped). When no `id` is present, falls back to
-timestamp dedup (`keep="last"`). The internal `id` column is stripped
-from `snapshot()` so the downstream pipeline sees only canonical
-columns.
+timestamp dedup (`keep="last"`). The `id` column is **retained** in
+`snapshot()` (no longer stripped) so the alignment engine can pair twin
+and ECU rows by id when one stream is delivered with a shift relative
+to the other — see §6.5. The `id` column is **not** a canonical signal,
+so `build_load_result` keeps it out of `columns_found`/`columns_missing`;
+downstream code (preview table, export) tolerates it alongside the
+canonical timestamp + signal columns. (Offline CSVs never carry an
+`id` column — see §6.6 — so this is a live-only addition.)
 
 **Do NOT remove the id field or the stringification — QoS 1 redelivery
 would double-count samples.**
@@ -341,6 +346,44 @@ would double-count samples.**
 A sample without a timestamp raises `LiveSchemaError` (hard fail). A
 non-numeric signal value becomes `NaN` (soft fail — the sample's
 timestamp + other valid signals still get recorded).
+
+### 6.5 Id-aware alignment — robustness to delivery shifts
+
+When both twin and ECU snapshots carry an `id` column (the live path
+with QoS-1 dedup, §6.3), `alignment_engine.align()` pairs each ECU row
+to the twin row sharing its `id` **before** falling back to
+nearest-timestamp matching. This resolves a *delivery shift* between
+the two streams exactly: a twin sample and an ECU sample produced for
+the same logical instant may arrive with different wall-clock
+timestamps (one path lagging), but matching them by `id` sidesteps the
+shift and the misleading "gap is bigger than threshold" warning it
+used to produce. ECU rows whose `id` has no twin counterpart fall back
+to the existing nearest-timestamp path (with the 2× twin-period NaN
+heuristic for out-of-range samples).
+
+The controller's periodic `_tick` (§5.2) re-runs `align()` every
+`interval_ms` on a fresh snapshot, and the ring buffer (§7) retains up
+to `max_age_ms` / `max_rows` of history — so a late `id` only has to
+arrive within the buffer window to be paired on the next tick. There is
+no per-sample "waiting" or re-queue machinery; the existing
+tick-and-re-align cadence is the mechanism.
+
+The "no time-range overlap" fatal `AlignmentError` is **gated on id
+availability**: when ids are present it is skipped up front and
+re-checked after alignment — if by-id matching produced zero pairs AND
+the timestamp ranges don't overlap, alignment is refused with a new
+"No matches by id and no time-range overlap" message. When ids are
+absent (offline CSVs, or live streams that omit ids), the original
+upfront no-overlap raise is unchanged.
+
+Wall-clock deltas for **id-matched** pairs are excluded from
+`AlignedData.max_delta_t` and therefore do not trip the
+`_MAX_DELTA_T_WARN_MS` "alignment may be unreliable" warning — an
+id-matched pair's timestamp delta is a delivery shift, not an
+alignment-quality signal. Only fallback (non-id-matched) deltas count.
+Offline runs (no `id` column → all pairs are fallback) behave
+identically to before; the 14 original `test_alignment_engine` tests
+are unchanged.
 
 ---
 
@@ -363,7 +406,11 @@ concat-union; earlier rows get `NaN`.
 
 `snapshot()` returns a **copy** — the alignment engine may hold a
 reference while the buffer keeps growing. Without the copy, an append
-would mutate the snapshot.
+would mutate the snapshot. The `id` column is **retained** in the
+returned copy (no longer stripped) so `alignment_engine.align()` can
+pair twin and ECU rows by id — see §6.5. The `id` column is not a
+canonical signal, so `build_load_result` keeps it out of
+`columns_found`/`columns_missing`.
 
 ---
 
@@ -380,12 +427,16 @@ a third load path, reuse `build_load_result`.
 
 ## 9. Testing conventions
 
-### 9.1 pytest, 202 tests, ~5-8s
+### 9.1 pytest, 237 tests, ~4s
 
 ```bash
 source ../venv/bin/activate
 python -m pytest tests/ -q
 ```
+
+The venv lives at `final_tool/venv` (i.e. `source venv/bin/activate` when
+your cwd is `final_tool/`; the historical `../venv` path assumes a
+different cwd).
 
 ### 9.2 Pure-Python tests vs Qt tests
 
@@ -500,8 +551,11 @@ Unless the user explicitly asks for them.
    the `columns_found`/`columns_missing`/`time_range` logic.
 4. **Reuse the offline populate methods** for live results. No duplicate
    UI logic.
-5. **Keep the `id` field and stringification.** QoS 1 redelivery would
-   double-count samples without it.
+5. **Keep the `id` field and stringification, and keep `id` in the
+   snapshot.** QoS 1 redelivery would double-count samples without the
+   id/stringification, and `align()`'s id-aware branch (§6.5) needs the
+   `id` column to survive `snapshot()` to pair shifted twin/ECU streams.
+   Do NOT re-introduce the old `snapshot()` strip of `id`.
 6. **Keep `decimals=4` on tolerance spinboxes.** The 2-decimal default
    was a bug.
 7. **Long-lived workers stay alive.** Don't wire `finished → thread.quit`
@@ -515,7 +569,8 @@ Unless the user explicitly asks for them.
 13. **No comments in code** unless asked (per the repo's code style).
 14. **Never commit unless the user explicitly asks.**
 15. **Run `python -m pytest tests/ -q` before declaring a task done.**
-    All 202 tests must pass.
+    The full suite must pass and the test count must not drop (currently
+    237; the old "202" figure was stale — the suite has grown).
 16. **Live-mode wire timestamps are Unix epoch MILLISECONDS.** See §6.0.
     Every consumer that compares raw timestamp deltas
     (`live_accumulator.DEFAULT_MAX_AGE_MS`,

@@ -48,14 +48,19 @@ No Qt, no paho — the controller (``live_controller.py``) is the only
 piece that touches Qt and MQTT. This keeps the buffer easy to unit-test
 in isolation.
 
-**QoS-1 deduplication.**
+**QoS-1 deduplication + id-aware alignment.**
 ``live_schema.parse_message`` extracts an optional publisher-assigned
 ``id`` from each sample (keys ``id`` / ``seq`` / ``msg_id`` / ...). When
 present, the buffer stores it in an internal ``id`` column and dedupes
 on it with ``keep="first"`` so an at-least-once redelivery is dropped.
 When no ``id`` is carried, the buffer falls back to timestamp-based
-dedup (``keep="last"``). The ``id`` column is stripped from the snapshot
-returned by ``snapshot()`` so the downstream pipeline is unaffected.
+dedup (``keep="last"``). The ``id`` column is **retained** in the
+snapshot returned by ``snapshot()`` so the alignment engine can pair
+twin and ECU rows by id when one stream is delivered with a shift —
+the matching id only has to arrive before the ring buffer drops it.
+The offline CSV path never carries an ``id`` column, so the extra
+column is a live-only addition that downstream code (preview table,
+export) tolerates alongside the canonical columns.
 """
 
 from __future__ import annotations
@@ -201,15 +206,14 @@ class _SourceBuffer:
         cheap on a 10 000-row frame (<1 ms) and runs at most a few times
         per second on the controller's tick.
 
-        The internal ``id`` column (used only for QoS-1 dedup) is
-        dropped here so the snapshot's columns are exactly the canonical
-        timestamp + signal columns — the downstream pipeline and preview
-        tab see no difference between a live snapshot and a CSV load.
+        The internal ``id`` column (used for QoS-1 dedup) is **retained**
+        so the alignment engine can pair twin and ECU rows by id when one
+        stream is delivered with a shift relative to the other. On the
+        offline CSV path no ``id`` column exists, so this is a live-only
+        extra column that downstream code (preview table, export)
+        tolerates alongside the canonical timestamp + signal columns.
         """
-        df = self._df.copy()
-        if "id" in df.columns:
-            df = df.drop(columns=["id"])
-        return df
+        return self._df.copy()
 
     @property
     def row_count(self) -> int:

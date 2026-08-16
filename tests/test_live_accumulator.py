@@ -14,6 +14,7 @@ import pytest
 
 from live_accumulator import LiveBuffer, _SourceBuffer
 from live_schema import LiveSample
+from alignment_engine import align, ALIGN_NEAREST
 
 
 # ---------------------------------------------------------------------------
@@ -247,15 +248,24 @@ class TestQos1Dedup:
         assert twin_lr.row_count == 1
         assert twin_lr.df["voltage"].iloc[0] == 3.40  # keep="last"
 
-    def test_id_column_not_in_snapshot(self):
-        # The internal id column must not leak into the LoadResult
-        # snapshot — downstream pipeline columns stay canonical.
+    def test_id_column_preserved_in_snapshot(self):
+        # The publisher ``id`` column is retained in the LoadResult
+        # snapshot so the alignment engine can pair twin and ECU rows by
+        # id when one stream is delivered with a shift. Downstream code
+        # (preview table, export) tolerates the extra column alongside
+        # the canonical timestamp + signal columns.
         buf = LiveBuffer()
         buf.add_sample(_twin_sample(0.0, sample_id="s1"))
         buf.add_sample(_ecu_sample(0.0, sample_id="e1"))
         twin_lr, ecu_lr = buf.build_results()
-        assert "id" not in twin_lr.df.columns
-        assert "id" not in ecu_lr.df.columns
+        assert "id" in twin_lr.df.columns
+        assert "id" in ecu_lr.df.columns
+        assert twin_lr.df["id"].iloc[0] == "s1"
+        assert ecu_lr.df["id"].iloc[0] == "e1"
+        # ``id`` is not a canonical signal, so it stays out of
+        # columns_found (parity with live ``build_load_result``).
+        assert "id" not in twin_lr.columns_found
+        assert "id" not in ecu_lr.columns_found
 
     def test_mixed_id_and_no_id_in_same_buffer(self):
         # A stream that starts without ids then switches to ids (or
@@ -320,3 +330,63 @@ class TestAxisKind:
         buf.add_sample(_ecu_sample(0.0))
         twin_lr, _ = buf.build_results()
         assert twin_lr.axis_kind == "timestamp"
+
+
+# ---------------------------------------------------------------------------
+# Id-aware alignment through the buffer (the shift-resolution fix)
+# ---------------------------------------------------------------------------
+class TestIdAwareAlignmentThroughBuffer:
+    def test_shifted_streams_align_by_id_end_to_end(self):
+        """Feed a LiveBuffer twin and ECU samples carrying the same ids
+        but delivered with a 600 ms timestamp shift. The buffer retains
+        the ``id`` column in its snapshot (see
+        ``test_id_column_preserved_in_snapshot``), so ``align()`` pairs
+        the rows by id instead of refusing on the non-overlapping
+        timestamp ranges."""
+        buf = LiveBuffer()
+        for i in range(3):
+            buf.add_sample(_twin_sample(
+                t=float(i) * 100.0, v=3.30 + 0.10 * i, sample_id=f"s{i}",
+            ))
+        for i in range(3):
+            buf.add_sample(_ecu_sample(
+                t=600.0 + float(i) * 100.0,
+                v=3.31 + 0.10 * i,
+                sample_id=f"s{i}",
+            ))
+        twin_lr, ecu_lr = buf.build_results()
+        assert twin_lr is not None and ecu_lr is not None
+        aligned = align(twin_lr, ecu_lr, ALIGN_NEAREST)
+        assert aligned.n_matched == 3
+        assert aligned.n_total == 3
+        np.testing.assert_allclose(
+            aligned.signals["voltage"].errors, [0.01, 0.01, 0.01],
+        )
+        # The 600 ms delivery shift must NOT trip the gap warning.
+        assert not any("unreliable" in w for w in aligned.warnings)
+
+    def test_late_id_arrives_within_buffer_window_pairs_on_next_snapshot(self):
+        """The controller re-runs ``align()`` on every tick, and the
+        ring buffer retains history within ``max_age_ms``. A late ECU id
+        that arrives a few ticks after its twin counterpart is still
+        matched once it lands — no special 'waiting' machinery needed."""
+        buf = LiveBuffer()
+        # Twin ids 0..2 arrive first.
+        for i in range(3):
+            buf.add_sample(_twin_sample(
+                t=float(i) * 100.0, v=3.30 + 0.10 * i, sample_id=f"s{i}",
+            ))
+        # ECU ids 0,1 present; id 2 not yet arrived.
+        buf.add_sample(_ecu_sample(t=620.0, v=3.31, sample_id="s0"))
+        buf.add_sample(_ecu_sample(t=720.0, v=3.41, sample_id="s1"))
+        twin_lr, ecu_lr = buf.build_results()
+        aligned = align(twin_lr, ecu_lr, ALIGN_NEAREST)
+        assert aligned.n_matched == 2  # s2's ECU half not here yet
+        # Now the late ECU id "s2" arrives (within the buffer window).
+        buf.add_sample(_ecu_sample(t=820.0, v=3.51, sample_id="s2"))
+        twin_lr2, ecu_lr2 = buf.build_results()
+        aligned2 = align(twin_lr2, ecu_lr2, ALIGN_NEAREST)
+        assert aligned2.n_matched == 3
+        np.testing.assert_allclose(
+            aligned2.signals["voltage"].errors, [0.01, 0.01, 0.01],
+        )

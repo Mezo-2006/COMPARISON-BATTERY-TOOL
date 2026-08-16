@@ -256,3 +256,150 @@ def test_interpolate_out_of_range_marked_nan(make_load_result):
         assert np.isnan(sig.twin_values[0])
         assert np.isnan(sig.twin_values[2])
         assert not np.isnan(sig.twin_values[1])
+
+
+# ---------------------------------------------------------------------------
+# Id-aware matching: shifted live streams (the bug being fixed)
+# ---------------------------------------------------------------------------
+def test_align_by_id_resolves_shifted_streams_no_overlap(make_load_result):
+    """Twin and ECU carry the same ids but arrive with a 600 ms delivery
+    shift, so their timestamp ranges don't overlap at all.  Before the
+    fix this raised ``No time-range overlap``; now the ids pair exactly,
+    alignment succeeds, and the "unreliable gap" warning does NOT fire
+    (the wall-clock shift between id-matched pairs is not an alignment-
+    quality signal)."""
+    twin = make_load_result(
+        "twin",
+        {"timestamp": [0.0, 100.0, 200.0],
+         "voltage": [3.30, 3.40, 3.50],
+         "id": ["1", "2", "3"]},
+    )
+    ecu = make_load_result(
+        "ecu",
+        {"timestamp": [600.0, 700.0, 800.0],
+         "voltage": [3.31, 3.41, 3.51],
+         "id": ["1", "2", "3"]},
+    )
+    aligned = align(twin, ecu, ALIGN_NEAREST)
+    assert aligned.n_total == 3
+    assert aligned.n_matched == 3
+    # By-id pairing: ECU id "1" -> twin v=3.30 (error 0.01), NOT the
+    # nearest-in-time twin sample (ts 200, v 3.50, which would give -0.19).
+    np.testing.assert_allclose(
+        aligned.signals["voltage"].twin_values, [3.30, 3.40, 3.50],
+    )
+    np.testing.assert_allclose(
+        aligned.signals["voltage"].errors, [0.01, 0.01, 0.01],
+    )
+    assert not any("unreliable" in w for w in aligned.warnings)
+    assert not any("could not be matched" in w for w in aligned.warnings)
+
+
+def test_align_by_id_overrides_nearest_timestamp_when_ranges_overlap(
+    make_load_result,
+):
+    """Even when the timestamp ranges DO overlap, ids must win: ECU ts 90
+    is nearest twin ts 100 (v 3.40), but ECU id "a" maps to twin ts 0
+    (v 3.30). Without id-aware matching the engine silently paired by
+    time and got the wrong twin sample."""
+    twin = make_load_result(
+        "twin",
+        {"timestamp": [0.0, 100.0, 200.0, 300.0],
+         "voltage": [3.30, 3.40, 3.50, 3.60],
+         "id": ["a", "b", "c", "d"]},
+    )
+    ecu = make_load_result(
+        "ecu",
+        {"timestamp": [90.0, 110.0],
+         "voltage": [9.99, 9.99],
+         "id": ["a", "c"]},
+    )
+    aligned = align(twin, ecu, ALIGN_NEAREST)
+    # id "a" -> twin idx 0 (v 3.30 @ ts 0); id "c" -> twin idx 2 (v 3.50 @ ts 200).
+    np.testing.assert_allclose(
+        aligned.signals["voltage"].twin_values, [3.30, 3.50],
+    )
+
+
+def test_align_by_id_partial_fallback_unmatched_row_marked_nan(
+    make_load_result,
+):
+    """Some ECU ids match a twin row, some don't. The matched ones pair
+    by id; the unmatched one falls back to nearest-timestamp and, since
+    its timestamp is outside the twin range, gets NaN'd and counted as
+    unmatched."""
+    twin = make_load_result(
+        "twin",
+        {"timestamp": [0.0, 100.0, 200.0],
+         "voltage": [3.30, 3.40, 3.50],
+         "id": ["1", "2", "3"]},
+    )
+    ecu = make_load_result(
+        "ecu",
+        {"timestamp": [600.0, 700.0, 800.0],
+         "voltage": [3.31, 3.41, 9.99],
+         "id": ["1", "2", "999"]},   # "999" has no twin counterpart
+    )
+    aligned = align(twin, ecu, ALIGN_NEAREST)
+    assert aligned.n_matched == 2
+    # First two pair by id with the half-step error.
+    np.testing.assert_allclose(
+        aligned.signals["voltage"].twin_values[:2], [3.30, 3.40],
+    )
+    # The unmatched row's twin value is NaN.
+    assert np.isnan(aligned.signals["voltage"].twin_values[2])
+    assert any("could not be matched" in w for w in aligned.warnings)
+
+
+def test_align_by_id_no_match_and_no_overlap_still_raises(make_load_result):
+    """Ids are present on both sides but none match, AND the timestamp
+    ranges don't overlap — genuinely unalignable. The deferred refusal
+    fires after the by-id attempt produces nothing."""
+    twin = make_load_result(
+        "twin",
+        {"timestamp": [0.0, 100.0, 200.0],
+         "voltage": [3.30, 3.40, 3.50],
+         "id": ["1", "2", "3"]},
+    )
+    ecu = make_load_result(
+        "ecu",
+        {"timestamp": [600.0, 700.0, 800.0],
+         "voltage": [3.31, 3.41, 3.51],
+         "id": ["100", "101", "102"]},   # no id overlap with twin
+    )
+    with pytest.raises(AlignmentError, match="No matches by id"):
+        align(twin, ecu, ALIGN_NEAREST)
+
+
+def test_align_by_id_ignores_null_ids(make_load_result):
+    """ECU rows with a null id must fall back to nearest-timestamp
+    matching, not crash or be silently dropped."""
+    twin = make_load_result(
+        "twin",
+        {"timestamp": [0.0, 100.0],
+         "voltage": [3.30, 3.40],
+         "id": ["1", "2"]},
+    )
+    ecu = make_load_result(
+        "ecu",
+        {"timestamp": [105.0, 600.0],
+         "voltage": [3.41, 9.99],
+         "id": ["2", None]},   # first matches by id; second falls back
+    )
+    aligned = align(twin, ecu, ALIGN_NEAREST)
+    # ECU id "2" (@ ts 105) -> twin idx 1 (v 3.40 @ ts 100), error 0.01.
+    np.testing.assert_allclose(aligned.signals["voltage"].twin_values[0], 3.40)
+    # ECU ts 600 with null id -> fallback, outside twin range -> NaN.
+    assert np.isnan(aligned.signals["voltage"].twin_values[1])
+    assert aligned.n_matched == 1
+
+
+def test_align_by_id_offline_no_id_column_unchanged(twin_result_five,
+                                                      ecu_result_five):
+    """The offline fixtures have no ``id`` column, so the id-aware branch
+    must be a no-op: n_matched and max_delta_t are identical to the
+    historical pure-timestamp result."""
+    aligned = align(twin_result_five, ecu_result_five, ALIGN_NEAREST)
+    assert aligned.n_matched == 5
+    assert aligned.max_delta_t == pytest.approx(0.05, abs=1e-9)
+    assert not any("unreliable" in w for w in aligned.warnings)

@@ -72,7 +72,7 @@ def _make_load_result(
         df=df,
         source_label=source_label,
         row_count=len(df),
-        columns_found=[c for c in cols if c != "timestamp"],
+        columns_found=[c for c in cols if c not in ("timestamp", "id")],
         columns_missing=[],
         source_columns=source_columns,
         time_range=(float(timestamp[0]), float(timestamp[-1])),
