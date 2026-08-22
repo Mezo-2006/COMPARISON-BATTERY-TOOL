@@ -207,6 +207,107 @@ def test_live_window_pins_x_range_to_latest_samples(main_window, make_aligned_da
     assert ex_min == pytest.approx(70.0)
 
 
+def test_live_window_uses_each_signals_own_latest_valid_sample(
+    main_window, make_aligned_data,
+):
+    """Regression: a sparser signal must not be pinned to a window based
+    on a *different* signal's latest timestamp -- that leaves its own
+    plot showing an empty range even though its own data is fine, just
+    older (e.g. SoH updating less often than voltage on a real stream).
+    """
+    aligned = make_aligned_data(
+        timestamps=[0.0, 10.0, 100.0],
+        signals={
+            "voltage": ([3.3, 3.3, 3.3], [3.3, 3.3, 3.3]),
+            # SoH's last sample (t=100) is unmatched (NaN on the ECU
+            # side) -- its own latest *valid* sample is at t=10.
+            "soh": ([95.0, 95.0, 95.0], [95.0, 95.0, float("nan")]),
+        },
+    )
+    pm = _make_pm(main_window)
+    pm.update(aligned, live_window_ms=30.0)
+
+    (v_min, v_max), _ = main_window.plotWidgetVoltage.getPlotItem().viewRange()
+    assert v_max == pytest.approx(100.0)
+    assert v_min == pytest.approx(70.0)
+
+    (s_min, s_max), _ = main_window.plotWidgetSoh.getPlotItem().viewRange()
+    assert s_max == pytest.approx(10.0)
+    assert s_min == pytest.approx(-20.0)
+
+
+# ---------------------------------------------------------------------------
+# A user dragging/zooming/auto-ranging a live plot must not have it
+# snapped back on the very next tick (regression for "it moves on its
+# own and reverts immediately").
+# ---------------------------------------------------------------------------
+def test_user_range_change_stops_that_plot_from_being_repinned(
+    main_window, make_aligned_data,
+):
+    aligned1 = make_aligned_data(
+        timestamps=[0.0, 10.0, 100.0],
+        signals={
+            "voltage": ([3.3, 3.3, 3.3], [3.3, 3.3, 3.3]),
+            "current": ([1.2, 1.2, 1.2], [1.2, 1.2, 1.2]),
+        },
+    )
+    pm = _make_pm(main_window)
+    pm.update(aligned1, live_window_ms=30.0)
+
+    # Simulate the user dragging the voltage plot -- the same signal
+    # pyqtgraph's ViewBox emits for a real pan/zoom gesture (and for a
+    # click on its own "A" auto-range button).
+    main_window.plotWidgetVoltage.getPlotItem().sigRangeChangedManually.emit(
+        [True, True]
+    )
+    main_window.plotWidgetVoltage.setXRange(0.0, 5.0, padding=0)
+
+    aligned2 = make_aligned_data(
+        timestamps=[0.0, 10.0, 200.0],
+        signals={
+            "voltage": ([3.3, 3.3, 3.3], [3.3, 3.3, 3.3]),
+            "current": ([1.2, 1.2, 1.2], [1.2, 1.2, 1.2]),
+        },
+    )
+    pm.update(aligned2, live_window_ms=30.0)
+
+    # Voltage stays exactly where the user left it -- not snapped back.
+    (v_min, v_max), _ = main_window.plotWidgetVoltage.getPlotItem().viewRange()
+    assert v_max == pytest.approx(5.0)
+    assert v_min == pytest.approx(0.0)
+
+    # Current (never touched) keeps tracking the live window normally.
+    (c_min, c_max), _ = main_window.plotWidgetCurrent.getPlotItem().viewRange()
+    assert c_max == pytest.approx(200.0)
+    assert c_min == pytest.approx(170.0)
+
+
+def test_resume_live_follow_re_arms_a_user_released_plot(
+    main_window, make_aligned_data,
+):
+    aligned = make_aligned_data(
+        timestamps=[0.0, 10.0, 100.0],
+        signals={"voltage": ([3.3, 3.3, 3.3], [3.3, 3.3, 3.3])},
+    )
+    pm = _make_pm(main_window)
+    pm.update(aligned, live_window_ms=30.0)
+
+    main_window.plotWidgetVoltage.getPlotItem().sigRangeChangedManually.emit(
+        [True, True]
+    )
+    main_window.plotWidgetVoltage.setXRange(0.0, 5.0, padding=0)
+    pm.update(aligned, live_window_ms=30.0)
+    (_v_min, v_max), _ = main_window.plotWidgetVoltage.getPlotItem().viewRange()
+    assert v_max == pytest.approx(5.0)  # still released, not re-pinned
+
+    # A fresh live session (back.py calls this alongside
+    # LiveController.reset on reconnect) re-arms every plot.
+    pm.resume_live_follow()
+    pm.update(aligned, live_window_ms=30.0)
+    (_v_min2, v_max2), _ = main_window.plotWidgetVoltage.getPlotItem().viewRange()
+    assert v_max2 == pytest.approx(100.0)
+
+
 # ---------------------------------------------------------------------------
 # axis_kind-aware bottom-axis label
 # ---------------------------------------------------------------------------

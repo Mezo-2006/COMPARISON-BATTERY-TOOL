@@ -1,12 +1,16 @@
 """GUI Event Window for the Event Detection module (Task 14).
 
-``EventWindow`` is a plain ``QWidget`` — not wired into ``f.py`` (the
+``EventWindow`` is a plain ``QWidget`` — not part of ``f.py`` (the
 pyuic5-generated main window: hand-editing it is a footgun since
-regenerating from ``f.ui`` would wipe any changes). It is self-contained
-so ``back.py`` can drop it into a new tab later with a couple of lines,
-and it can also be run standalone for a live demo (see ``__main__``
-below), which replays synthetic real/twin dict pairs through
-``EventDetector`` on a timer so every rule in the spec gets exercised.
+regenerating from ``f.ui`` would wipe any changes). ``f.ui`` only
+reserves an empty ``tabEvents`` tab + layout for it; ``back.py``
+instantiates ``EventWindow`` and drops it into that layout at startup
+(see ``MainWindow.__init__``'s "Event Detection (Tab 8)" section) rather
+than hand-authoring it in Designer XML. It is self-contained so that
+wiring is a couple of lines, and it can also be run standalone for a
+live demo (see ``__main__`` below), which replays synthetic real/twin
+dict pairs through ``EventDetector`` on a timer so every rule in the
+spec gets exercised.
 
 Layout
 ------

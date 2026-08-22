@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import math
 import sys
+import time
 from typing import Optional
 
 import numpy as np
@@ -84,16 +85,20 @@ _FLOAT_FMT = "{:.4f}"
 # Live-mode Graphs tab: width, in milliseconds (the live pipeline's wire
 # timestamp unit -- see synthetic_data_generator's "Timestamp convention"
 # section), of the sliding X-range window kept on screen. Passed to
-# PlotManager.update(..., live_window_ms=...) only from the live re-align
-# tick (_on_live_aligned) -- offline runs and live Freeze/Snapshot show the
-# full accumulated range instead, matching a one-shot comparison rather
-# than a scrolling stream. See PlotManager.update and _apply_live_window
-# for why this must be pinned every tick rather than left to pyqtgraph's
-# default auto-range: without it, a live plot's view either "compresses"
-# (auto-fits the whole, ever-growing buffer instead of scrolling) or can
-# get stuck on a stale manual pan/zoom range that no longer contains the
-# fresh data after a disconnect + reconnect (the buffer is reset on
-# reconnect), which reads as "the graphs stopped appearing".
+# PlotManager.update(..., live_window_ms=...) from every live-mode call
+# site (_on_live_aligned's per-tick redraw, on_live_freeze_toggled's
+# un-freeze redraw, on_live_snapshot's capture redraw -- see
+# _live_plot_window) -- offline runs show the full accumulated range
+# instead, matching a one-shot comparison rather than a scrolling stream.
+# See PlotManager.update / _apply_live_window for why this must be pinned
+# every tick rather than left to pyqtgraph's default auto-range: without
+# it, a live plot's view either "compresses" (auto-fits the whole,
+# ever-growing buffer instead of scrolling) or can get stuck on a stale
+# manual pan/zoom range that no longer contains the fresh data after a
+# disconnect + reconnect (the buffer is reset on reconnect), which reads
+# as "the graphs stopped appearing". The Live tab's "Freeze View" toggle
+# (PlotManager.set_live_follow) is the deliberate, persistent way to
+# pause this pin per plot -- see on_live_freeze_toggled.
 _LIVE_PLOT_WINDOW_MS = 60_000.0
 
 # Same idea, but for a "sequence" axis (a plain sample-id counter — see
@@ -203,6 +208,22 @@ def _aligned_row_to_dicts(aligned: AlignedData, i: int) -> tuple:
     alignment_engine's: ECU is ground truth). A signal is only included
     when its value at this row isn't NaN, so an unmatched sample reads
     as "missing" to ``EventDetector`` rather than a bogus NaN comparison.
+
+    Known limitation: both dicts' ``"timestamp"`` are the *aligned*
+    (ECU) timeline, not each source's own raw timestamp -- alignment
+    collapses the twin onto the ECU's timeline, so the twin's original
+    timestamp isn't available here to begin with. This makes
+    ``EventDetector``'s Communication-Loss check (task 6 -- "a source's
+    own timestamp field stops advancing") effectively unobservable via
+    this path: the shared aligned timestamp always advances every row,
+    so it never reads as "stalled" for either side. A stalled twin
+    publisher still gets caught, just as a "Missing Signal" alert
+    instead (the twin dict ends up carrying no signal keys once its
+    values go NaN) -- not mislabeled as harmless, just a different
+    ``event`` name than the spec's task 6. Fixing this for real needs
+    ``AlignedData``/``AlignedSignal`` to carry each source's original
+    per-row timestamp through alignment, which is a bigger change than
+    this glue function should make unilaterally.
     """
     ts = float(aligned.timestamps[i])
     real: dict = {"timestamp": ts}
@@ -256,6 +277,8 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
             warning_labels={
                 "voltage": self.labelVoltageWarning,
                 "current": self.labelCurrentWarning,
+                "soc": self.labelSocWarning,
+                "soh": self.labelSohWarning,
             },
         )
         # Signal checkboxes on the Graphs tab, in a fixed order used by
@@ -334,11 +357,21 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         self.checkBoxEnableCurrentThreshold.toggled.connect(
             self.doubleSpinBoxCurrentThreshold.setEnabled
         )
+        self.checkBoxEnableSocThreshold.toggled.connect(
+            self.doubleSpinBoxSocThreshold.setEnabled
+        )
+        self.checkBoxEnableSohThreshold.toggled.connect(
+            self.doubleSpinBoxSohThreshold.setEnabled
+        )
         for w in (self.checkBoxEnableVoltageThreshold,
-                  self.checkBoxEnableCurrentThreshold):
+                  self.checkBoxEnableCurrentThreshold,
+                  self.checkBoxEnableSocThreshold,
+                  self.checkBoxEnableSohThreshold):
             w.toggled.connect(self.on_signal_checkbox_changed)
         for w in (self.doubleSpinBoxVoltageThreshold,
-                  self.doubleSpinBoxCurrentThreshold):
+                  self.doubleSpinBoxCurrentThreshold,
+                  self.doubleSpinBoxSocThreshold,
+                  self.doubleSpinBoxSohThreshold):
             w.valueChanged.connect(self.on_signal_checkbox_changed)
 
         # Tab 6: Export
@@ -347,6 +380,7 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
 
         # Tab 7: Live MQTT
         self.btnLiveConnect.toggled.connect(self.on_live_connect_toggled)
+        self.btnLiveFreeze.toggled.connect(self.on_live_freeze_toggled)
         self.btnLiveSnapshot.clicked.connect(self.on_live_snapshot)
         self.checkBoxLiveAutoRefresh.toggled.connect(
             self.on_live_auto_refresh_toggled
@@ -566,7 +600,15 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         appended to, matching the Statistics/Graphs tabs' behaviour.
         Each row's own timestamp drives the detector's ``now`` so
         Timeout/Communication-Loss are judged against the recorded
-        sample cadence, not how fast this loop happens to execute.
+        sample cadence, not how fast this loop happens to execute. This
+        is safe for offline CSVs specifically because ``DetectorConfig``'s
+        ``expected_update_interval_s`` / ``communication_timeout_s`` are
+        seconds and this project's own CSV fixtures are roughly
+        seconds-scale (see ``data_loader``'s "Timestamp normalisation"
+        note) — do NOT reuse this sample-timestamp-as-``now`` approach for
+        the live path, where timestamps are Unix-epoch milliseconds (see
+        context.md §6.0); ``_run_live_event_detection`` below uses real
+        wall-clock time instead for exactly that reason.
         """
         self.event_detector = EventDetector()
         self.event_window.clear()
@@ -586,14 +628,34 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         ticks once old rows get trimmed) — cursor by timestamp instead of
         index, and keep the same EventDetector alive across ticks so
         spike/freeze/oscillation history spans the whole session.
+
+        Unlike ``_run_event_detection`` (offline), this does NOT drive
+        ``EventDetector.update``'s ``now`` from the sample's own
+        timestamp: live-mode timestamps are Unix-epoch **milliseconds**
+        (context.md §6.0) while ``DetectorConfig.expected_update_interval_s``
+        / ``timeout_tolerance_s`` / ``communication_timeout_s`` are
+        seconds — feeding raw millisecond values in as ``now`` made every
+        inter-sample gap look like it was thousands of times longer than
+        the configured timeout, so ``EVENT_TIMEOUT`` fired on almost every
+        tick. Real wall-clock time is what ``update()``'s Timeout check
+        (task 9) is actually meant to measure — how often *this loop*
+        gets fresh data — and the controller's re-align timer already
+        ticks on a real cadence (``interval_ms``), so ``time.time()`` is
+        the correct clock here, not the sample's own timestamp. One
+        wall-clock read per tick (not per row) so a batch of several new
+        rows arriving together in one tick isn't misread as N
+        back-to-back updates at t=now. The alert's own displayed
+        timestamp is unaffected — that comes from ``sample_ts`` inside
+        ``EventDetector.update``, not from ``now``.
         """
+        now = time.time()
         alerts = []
         for i in range(aligned.n_total):
             ts = float(aligned.timestamps[i])
             if ts <= self._live_event_last_ts:
                 continue
             real, twin = _aligned_row_to_dicts(aligned, i)
-            alerts += self.live_event_detector.update(real, twin, now=ts)
+            alerts += self.live_event_detector.update(real, twin, now=now)
             self._live_event_last_ts = ts
         self.event_window.add_alerts(alerts)
 
@@ -694,13 +756,19 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         """Read the Config tab's threshold-warning widgets.
 
         Returns ``{"voltage": (enabled, value), "current": (enabled,
-        value)}`` for :meth:`PlotManager.update`.
+        value), "soc": (enabled, value), "soh": (enabled, value)}`` for
+        :meth:`PlotManager.update`. Temperature has no threshold-warning
+        control (never has — only Voltage/Current/SoC/SoH do).
         """
         return {
             "voltage": (self.checkBoxEnableVoltageThreshold.isChecked(),
                         float(self.doubleSpinBoxVoltageThreshold.value())),
             "current": (self.checkBoxEnableCurrentThreshold.isChecked(),
                         float(self.doubleSpinBoxCurrentThreshold.value())),
+            "soc": (self.checkBoxEnableSocThreshold.isChecked(),
+                    float(self.doubleSpinBoxSocThreshold.value())),
+            "soh": (self.checkBoxEnableSohThreshold.isChecked(),
+                    float(self.doubleSpinBoxSohThreshold.value())),
         }
 
     def _read_config_settings(self) -> tuple:
@@ -712,9 +780,8 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
             "voltage":     float(self.doubleSpinBoxVoltageTolerance.value()),
             "current":     float(self.doubleSpinBoxCurrentTolerance.value()),
             "temperature": float(self.doubleSpinBoxTemperatureTolerance.value()),
-            # SoC / SoH use statistics_engine.DEFAULT_TOLERANCES (no UI
-            # spinboxes for them) — omit them from the dict and the
-            # engine will fall back.
+            "soc":         float(self.doubleSpinBoxSocTolerance.value()),
+            "soh":         float(self.doubleSpinBoxSohTolerance.value()),
         }
         return method, tolerances
 
@@ -850,6 +917,16 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
             self.live_event_detector = EventDetector()
             self._live_event_last_ts = float("-inf")
             self.event_window.clear()
+            # And for the Graphs tab: drop any per-plot "user is looking
+            # around manually" state left over from the previous session
+            # (see PlotManager.resume_live_follow) so the new session's
+            # data is tracked live again instead of staying stuck on
+            # wherever the user last panned/zoomed/auto-ranged before --
+            # including an explicit Freeze View from the previous
+            # session, which should not silently carry over either.
+            self.plot_manager.resume_live_follow()
+            self.btnLiveFreeze.setChecked(False)
+            self.btnLiveFreeze.setText("Freeze View")
 
     def _mqtt_disconnect(self) -> None:
         if self.mqtt_worker is not None:
@@ -865,6 +942,41 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         )
 
     def _teardown_mqtt_thread(self) -> None:
+        """Quit + wait on any existing MQTT thread, and sever the old
+        worker's signals first so a delayed callback can't reach the GUI.
+
+        ``_do_disconnect`` (paho's ``disconnect()`` + ``loop_stop()``) can
+        fire paho's ``on_disconnect`` callback -- and therefore
+        ``MqttWorker.disconnected`` -- *after* this teardown has already
+        started, because paho's own network thread is independent of the
+        ``mqtt_thread.wait()`` below. If that late ``disconnected`` signal
+        is still connected to ``_on_mqtt_disconnected`` by the time it's
+        delivered, it calls ``btnLiveConnect.setChecked(False)`` -- and if
+        the user has *already reconnected* by then (new worker created,
+        button re-checked, live controller re-armed), that stale signal
+        unchecks the button again, which re-enters
+        ``on_live_connect_toggled`` -> ``_mqtt_disconnect()`` and stops the
+        just-started live controller's re-align timer. Symptom: disconnect
+        then immediately reconnect, and the graphs never update again even
+        though the new MQTT session is nominally live. Disconnecting the
+        old worker's signals here -- before it's discarded -- makes any
+        signal already queued from it a no-op when delivered, closing the
+        race regardless of exact timing. (Qt's ``disconnect()`` is safe to
+        call even with an in-flight queued emission: delivery is gated on
+        the connection still existing at dispatch time, not at emit time.)
+        """
+        if self.mqtt_worker is not None:
+            for sig, slot in (
+                (self.mqtt_worker.connected, self._on_mqtt_connected),
+                (self.mqtt_worker.disconnected, self._on_mqtt_disconnected),
+                (self.mqtt_worker.error_occurred, self._on_mqtt_error),
+                (self.mqtt_worker.message_received,
+                 self._on_mqtt_message_to_controller),
+            ):
+                try:
+                    sig.disconnect(slot)
+                except TypeError:
+                    pass  # already disconnected -- nothing to do
         if self.mqtt_thread is not None:
             self.mqtt_thread.quit()
             self.mqtt_thread.wait(3000)
@@ -940,16 +1052,29 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         # Re-render plots with the currently-enabled signal set. Pin the
         # sliding live window so the view shifts with new data instead of
         # compressing to fit the whole growing buffer (see
-        # _LIVE_PLOT_WINDOW_MS / _LIVE_PLOT_WINDOW_SEQUENCE). The window
-        # width itself depends on what the axis actually is.
-        window = (_LIVE_PLOT_WINDOW_SEQUENCE if aligned.axis_kind == "sequence"
-                  else _LIVE_PLOT_WINDOW_MS)
+        # _LIVE_PLOT_WINDOW_MS / _LIVE_PLOT_WINDOW_SEQUENCE) -- unless
+        # "Freeze View" is on, in which case PlotManager itself skips the
+        # pin per plot (see plot_manager.PlotManager._pin_plot); curves
+        # still redraw with new samples either way, only the visible
+        # range stops sliding.
         self.plot_manager.update(aligned, self._enabled_signals_set(),
                                  self._read_threshold_settings(),
-                                 live_window_ms=window)
+                                 live_window_ms=self._live_plot_window(aligned))
         # Feed only the newly-arrived rows through the (persistent) live
         # event detector.
         self._run_live_event_detection(aligned)
+
+    def _live_plot_window(self, aligned: AlignedData) -> float:
+        """Sliding-window width (ms, or a sample count for a sequence
+        axis) for :meth:`PlotManager.update`'s ``live_window_ms`` --
+        shared by every call site that redraws the live graphs
+        (``_on_live_aligned``'s per-tick redraw, ``on_live_freeze_toggled``'s
+        immediate un-freeze redraw, and ``on_live_snapshot``'s capture
+        redraw) so they all pick the same width instead of duplicating
+        the axis_kind check.
+        """
+        return (_LIVE_PLOT_WINDOW_SEQUENCE if aligned.axis_kind == "sequence"
+                else _LIVE_PLOT_WINDOW_MS)
 
     def _on_live_stats(self, stats: StatisticsResult) -> None:
         """New statistics snapshot — populate the Statistics tab."""
@@ -1004,13 +1129,43 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         ecu_topic = self.lineEditMqttEcuTopic.text().strip() or "bms/actual/#"
         self.live_controller.start.emit(interval_ms, twin_topic, ecu_topic)
 
-    def on_live_snapshot(self) -> None:
-        """Freeze: build a one-off aligned snapshot and stash it as the
-        current ``self.aligned_data`` / ``self.stats_result`` so the
-        Export tab acts on the frozen state.
+    def on_live_freeze_toggled(self, checked: bool) -> None:
+        """"Freeze View": pause/resume the Graphs tab's sliding live
+        window, independent of Snapshot / Export.
 
-        This makes the live stream "capture-able": the user can hit
-        Freeze, switch to Export, and save the current comparison.
+        Freezing does **not** stop the stream, the re-align timer, or
+        the curves updating with new samples -- it only pauses the
+        X-range pin (``PlotManager.set_live_follow``) so the visible
+        time range stops auto-scrolling, letting the user look at the
+        current view without it sliding away underneath them.
+        Un-freezing snaps straight back to the live window using
+        whatever aligned data is already cached from the last tick,
+        instead of waiting up to one refresh interval for the next one.
+        """
+        self.plot_manager.set_live_follow(not checked)
+        self.btnLiveFreeze.setText(
+            "Resume Live View" if checked else "Freeze View"
+        )
+        if not checked and self.aligned_data is not None:
+            self.plot_manager.update(
+                self.aligned_data, self._enabled_signals_set(),
+                self._read_threshold_settings(),
+                live_window_ms=self._live_plot_window(self.aligned_data),
+            )
+
+    def on_live_snapshot(self) -> None:
+        """Take Snapshot: build a one-off aligned+stats capture from the
+        current live buffers and stash it as ``self.aligned_data`` /
+        ``self.stats_result`` so the Report/Export tab can save it, the
+        same way it would a finished offline run.
+
+        Independent of Freeze View (``on_live_freeze_toggled``): taking a
+        snapshot doesn't pause the graphs, and freezing the graphs
+        doesn't capture anything for export on its own. The graphs still
+        redraw to reflect the captured moment so what's on screen matches
+        what Export would save -- respecting Freeze View if it's on
+        (``PlotManager._pin_plot`` skips the pin on a frozen plot the
+        same as it would on any other live tick).
         """
         if self.live_controller is None:
             QMessageBox.information(
@@ -1037,7 +1192,8 @@ class MainWindow(QtWidgets.QMainWindow, Ui_MainWindow):
         self.stats_result = stats
         self._populate_statistics_tab(stats)
         self.plot_manager.update(aligned, self._enabled_signals_set(),
-                                 self._read_threshold_settings())
+                                 self._read_threshold_settings(),
+                                 live_window_ms=self._live_plot_window(aligned))
         self.statusBar().showMessage(
             "Live snapshot taken — Export tab now acts on this snapshot.", 6000,
         )

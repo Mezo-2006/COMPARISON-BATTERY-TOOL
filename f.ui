@@ -705,6 +705,19 @@ QLabel#labelMaxErrorValue, QLabel#labelRMSEValue, QLabel#labelMatchPercentageVal
              </widget>
             </item>
             <item>
+             <widget class="QLabel" name="labelSocWarning">
+              <property name="styleSheet">
+               <string>color: #d32f2f; font-weight: bold;</string>
+              </property>
+              <property name="text">
+               <string/>
+              </property>
+              <property name="wordWrap">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
              <widget class="PlotWidget" name="plotWidgetSoc" native="true">
               <property name="minimumSize">
                <size>
@@ -722,6 +735,19 @@ QLabel#labelMaxErrorValue, QLabel#labelRMSEValue, QLabel#labelMatchPercentageVal
              <widget class="QLabel" name="labelSohPlotTitle">
               <property name="text">
                <string>SoH — Digital Twin vs ECU</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLabel" name="labelSohWarning">
+              <property name="styleSheet">
+               <string>color: #d32f2f; font-weight: bold;</string>
+              </property>
+              <property name="text">
+               <string/>
+              </property>
+              <property name="wordWrap">
+               <bool>true</bool>
               </property>
              </widget>
             </item>
@@ -939,6 +965,58 @@ QLabel#labelMaxErrorValue, QLabel#labelRMSEValue, QLabel#labelMatchPercentageVal
               </property>
              </widget>
            </item>
+           <item row="3" column="0">
+            <widget class="QLabel" name="labelSocToleranceCaption">
+             <property name="text">
+              <string>SoC Tolerance (%)</string>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="1">
+<widget class="QDoubleSpinBox" name="doubleSpinBoxSocTolerance">
+              <property name="decimals">
+               <number>4</number>
+              </property>
+              <property name="minimum">
+               <double>0.000000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>50.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.010000000000000</double>
+              </property>
+              <property name="value">
+               <double>1.000000000000000</double>
+              </property>
+             </widget>
+           </item>
+           <item row="4" column="0">
+            <widget class="QLabel" name="labelSohToleranceCaption">
+             <property name="text">
+              <string>SoH Tolerance (%)</string>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="1">
+<widget class="QDoubleSpinBox" name="doubleSpinBoxSohTolerance">
+              <property name="decimals">
+               <number>4</number>
+              </property>
+              <property name="minimum">
+               <double>0.000000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>50.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.010000000000000</double>
+              </property>
+              <property name="value">
+               <double>1.000000000000000</double>
+              </property>
+             </widget>
+           </item>
           </layout>
          </widget>
         </item>
@@ -1009,6 +1087,70 @@ QLabel#labelMaxErrorValue, QLabel#labelRMSEValue, QLabel#labelMatchPercentageVal
              </property>
              <property name="value">
               <double>50.000000000000000</double>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="0">
+            <widget class="QCheckBox" name="checkBoxEnableSocThreshold">
+             <property name="text">
+              <string>Warn when SoC exceeds</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="1">
+            <widget class="QDoubleSpinBox" name="doubleSpinBoxSocThreshold">
+             <property name="enabled">
+              <bool>false</bool>
+             </property>
+             <property name="suffix">
+              <string> %</string>
+             </property>
+             <property name="decimals">
+              <number>2</number>
+             </property>
+             <property name="minimum">
+              <double>0.000000000000000</double>
+             </property>
+             <property name="maximum">
+              <double>100.000000000000000</double>
+             </property>
+             <property name="singleStep">
+              <double>1.000000000000000</double>
+             </property>
+             <property name="value">
+              <double>100.000000000000000</double>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="0">
+            <widget class="QCheckBox" name="checkBoxEnableSohThreshold">
+             <property name="text">
+              <string>Warn when SoH exceeds</string>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="1">
+            <widget class="QDoubleSpinBox" name="doubleSpinBoxSohThreshold">
+             <property name="enabled">
+              <bool>false</bool>
+             </property>
+             <property name="suffix">
+              <string> %</string>
+             </property>
+             <property name="decimals">
+              <number>2</number>
+             </property>
+             <property name="minimum">
+              <double>0.000000000000000</double>
+             </property>
+             <property name="maximum">
+              <double>100.000000000000000</double>
+             </property>
+             <property name="singleStep">
+              <double>1.000000000000000</double>
+             </property>
+             <property name="value">
+              <double>100.000000000000000</double>
              </property>
             </widget>
            </item>
@@ -1399,9 +1541,25 @@ QLabel#labelMaxErrorValue, QLabel#labelRMSEValue, QLabel#labelMatchPercentageVal
             </widget>
            </item>
            <item>
+            <widget class="QPushButton" name="btnLiveFreeze">
+             <property name="text">
+              <string>Freeze View</string>
+             </property>
+             <property name="checkable">
+              <bool>true</bool>
+             </property>
+             <property name="toolTip">
+              <string>Pause the Graphs tab's auto-scrolling live window. New samples keep arriving and the curves keep updating -- only the visible time range stops sliding, so you can look at the current view without it moving. Un-freeze to jump straight back to live.</string>
+             </property>
+            </widget>
+           </item>
+           <item>
             <widget class="QPushButton" name="btnLiveSnapshot">
              <property name="text">
-              <string>Freeze &amp; Take Snapshot</string>
+              <string>Take Snapshot</string>
+             </property>
+             <property name="toolTip">
+              <string>Capture the current live data as a static comparison (like a completed offline run) so the Report/Export tab can save it to CSV/Excel/PDF/HTML. Independent of Freeze View -- taking a snapshot doesn't pause the graphs, and freezing the graphs doesn't export anything on its own.</string>
              </property>
             </widget>
            </item>

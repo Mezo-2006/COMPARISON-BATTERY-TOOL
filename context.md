@@ -98,17 +98,26 @@ All files live in `final_tool/`.
 | `live_schema.py` | ~400 | JSON payload parser + topic routing + id | Done |
 | `live_accumulator.py` | ~300 | ring buffer (max rows + max age) | Done |
 | `live_controller.py` | ~200 | Qt glue: MQTT → comparison engine | Done |
+| `event_detector.py` | ~630 | stateful dict-vs-dict anomaly detection (spike/freeze/oscillation/jump/timeout/comm-loss/threshold/out-of-range) | Done |
+| `event_window.py` | ~230 | `EventWindow` QWidget (alert table + CSV/Excel/PDF export) — embedded into `back.py`'s `tabEvents`, not part of `f.py` | Done |
+| `event_export.py` | — | CSV/Excel/PDF export for the event log, mirrors `export_engine.py`'s shape | Done |
+
+This table was missing the three `event_*` modules and the Events tab
+below for a while after they were added — this project's own worked
+example of the "doc drifts behind code" pattern the top of this file
+warns about. If you add a module, add its row here in the same commit.
 
 Docs in `docs/` (per-module line-by-line explanations) and
 `high_lvl_explaination.md` (architecture overview).
 
-Tests in `tests/` — **237 pytest tests, all passing (~4s)**.
+Tests in `tests/` — **251 pytest tests, all passing (~4-37s depending on
+machine)**.
 
 ---
 
 ## 4. UI conventions
 
-### 4.1 Tabs (7)
+### 4.1 Tabs (8)
 
 1. Load & Extract — file browse + Start Comparison
 2. Preview — twin + ECU QTableWidgets
@@ -118,6 +127,14 @@ Tests in `tests/` — **237 pytest tests, all passing (~4s)**.
 5. Config/Tolerance — 3 tolerance spinboxes + alignment combo + threshold warnings + Apply & Re-run
 6. Report/Export — CSV/Excel data + PDF/HTML report
 7. Live (MQTT) — broker config + topic roots + Auto-refresh + interval + Freeze/Snapshot
+8. Events — `tabEvents`, an empty tab + layout in `f.ui` that `back.py`
+   fills at startup with an `EventWindow` (see §3's `event_window.py`
+   row): alert table + Export CSV/Excel/PDF, fed by two `EventDetector`
+   instances (`self.event_detector` for offline runs, rebuilt fresh on
+   every Start Comparison / Apply & Re-run; `self.live_event_detector`
+   for the live path, persisted across ticks and reset on a fresh MQTT
+   connect — see `back.py._run_event_detection` /
+   `_run_live_event_detection`).
 
 ### 4.1a Graphs/Overlay tab — 5 unconditional overlays + 1 selectable error plot
 
@@ -170,13 +187,38 @@ comes back.
 
 ### 4.2 Tolerance spinboxes
 
-- `decimals = 4`, `minimum = 0.0`, `maximum = 50.0`, `singleStep = 0.01`, default `2.0`.
-- SoC / SoH have **no** tolerance spinboxes in the UI — they use
-  `statistics_engine.DEFAULT_TOLERANCES`. `_read_config_settings()`
-  deliberately omits them from the dict so the engine falls back.
+- `decimals = 4`, `minimum = 0.0`, `maximum = 50.0`, `singleStep = 0.01`.
+- All five signals (Voltage/Current/Temperature/SoC/SoH) now have a
+  tolerance spinbox (`doubleSpinBoxVoltageTolerance` /
+  `CurrentTolerance` / `TemperatureTolerance` / `SocTolerance` /
+  `SohTolerance`) — `_read_config_settings()` reads all five into the
+  tolerances dict passed to `statistics_engine.compute`. SoC/SoH default
+  to `1.0` (matching `statistics_engine.DEFAULT_TOLERANCES`, so adding
+  the spinboxes didn't silently change the default tolerance actually
+  used); Voltage/Current/Temperature default to `2.0` (unchanged,
+  pre-existing UI default — note this already differed slightly from
+  `DEFAULT_TOLERANCES["voltage"]` = `1.0` before this change too, that's
+  not new).
 - **Regression fixed:** previously the spinbox defaulted to 2 decimals
   and minimum 0.1, so a 3rd decimal was silently rejected and Apply &
   Re-run used 2.00. Do NOT remove `decimals=4` from `f.ui`.
+
+### 4.2a Threshold-warning controls (Config tab)
+
+`groupBoxThresholdWarnings` has one `checkBoxEnableXxxThreshold` +
+`doubleSpinBoxXxxThreshold` pair per signal that supports a
+threshold-warning overlay: Voltage, Current, SoC, SoH.
+`PlotManager._apply_threshold` (see §4.1a) is generic over any signal in
+`_SIGNAL_ORDER`, so wiring a 5th signal here is just adding the f.ui
+widgets + a `back.py._read_threshold_settings()` entry + a
+`labelXxxWarning` under that signal's plot container (see
+`PlotManager.__init__`'s `warning_labels` dict) — no engine change
+needed. **Temperature intentionally has no threshold-warning control**
+(matches the original Voltage/Current-only scope; add one the same way
+if that changes). SoC/SoH's spinboxes use `0-100 %` bounds and a `%`
+suffix (percentage-scale signals) instead of Voltage/Current's
+`-1000..1000` bounds with a unit suffix (`V`/`A`) — match whichever
+convention fits a new signal's unit if you add another.
 
 ### 4.3 Widget naming
 
@@ -236,36 +278,93 @@ Offline mode jumps to the Statistics tab on finish. Live mode does
 **NOT** auto-jump tabs — at 500 ms cadence it would be jarring. The user
 watches whatever tab they're on.
 
-### 5.6 Freeze & Snapshot button
+### 5.6 Freeze View and Take Snapshot are two separate buttons
 
-`on_live_snapshot` builds a one-off aligned+stats snapshot from the
-current buffers and stashes it as `self.aligned_data` /
-`self.stats_result` so the Export tab acts on the frozen state.
+**(Changed 2026-08-21 — used to be one "Freeze & Take Snapshot" button.)**
+They're different concerns and don't imply each other:
 
-### 5.7 Sliding live plot window (not auto-range)
+- **`btnLiveFreeze`** ("Freeze View" / checkable) — `on_live_freeze_toggled`
+  pauses/resumes the Graphs tab's sliding live window via
+  `PlotManager.set_live_follow(not checked)`. The stream, the re-align
+  timer, and the curves themselves keep updating with new samples the
+  whole time — only the visible X range stops auto-scrolling, so the
+  user can look at the current view without it sliding away. Un-freezing
+  snaps immediately back to the live window using whatever `aligned_data`
+  is already cached, instead of waiting up to one refresh interval for
+  the next tick.
+- **`btnLiveSnapshot`** ("Take Snapshot") — `on_live_snapshot` builds a
+  one-off aligned+stats capture from the current buffers and stashes it
+  as `self.aligned_data` / `self.stats_result` so the Report/Export tab
+  can save it, exactly like a finished offline run. Doesn't touch Freeze
+  state either way; the graphs still redraw to match the captured
+  moment, respecting Freeze if it's on.
 
-`PlotManager.update(..., live_window_ms=...)` — passed only from
-`_on_live_aligned` (`back.py._LIVE_PLOT_WINDOW_MS`, default 60 000 ms) —
-pins both Graphs-tab plots to `[latest_t - live_window_ms, latest_t]`
-via `setXRange(..., padding=0)` **every tick**, instead of leaving
-pyqtgraph's default auto-range in charge. Two bugs this fixes at once:
+Both buttons stay on the Live tab (not moved to Graphs) — see the
+decision record below.
+
+**Why this split:** the old combined button's "Freeze" half didn't
+actually freeze anything visible. It called `plot_manager.update(...)`
+once *without* `live_window_ms` (showing the full accumulated range for
+one frame), but with auto-refresh on, the controller's very next tick
+called `_on_live_aligned` again with `live_window_ms` set — overwriting
+that full view with the sliding window again within one refresh
+interval (default 500 ms). The button's label promised a pause the code
+never delivered; it read as "it moves on its own and reverts
+immediately." `PlotManager._live_follow` (§5.7) is what makes Freeze
+actually persist now.
+
+### 5.7 Sliding live plot window: per-signal, and respects user interaction
+
+`PlotManager.update(..., live_window_ms=...)` — passed from every
+live-mode call site (`_on_live_aligned`'s per-tick redraw,
+`on_live_freeze_toggled`'s un-freeze redraw, `on_live_snapshot`'s capture
+redraw — see `back.py._live_plot_window`) — pins each Graphs-tab plot to
+`[latest_valid_t - live_window_ms, latest_valid_t]` via
+`setXRange(..., padding=0)`, instead of leaving pyqtgraph's default
+auto-range in charge. Bugs this fixes:
 
 - **"Compresses instead of shifting."** Auto-range re-fits *every*
   accumulated sample on every redraw, so as the live buffer grows toward
   its cap (`live_accumulator.DEFAULT_MAX_AGE_MS`, 10 minutes) the whole
   history gets squeezed into the same view width instead of the view
   scrolling forward at a constant width.
-- **"Graphs stop appearing after disconnect → reconnect."** pyqtgraph's
-  auto-range gets permanently disabled the moment a user manually
-  pans/zooms a plot, pinning it to that manual range. `reset` clears the
-  buffer on reconnect, so a stale manual range from before the disconnect
-  may no longer contain the fresh data at all — reading as "the graph
-  went blank." Calling `setXRange` unconditionally every tick overrides
-  any stuck manual range and snaps the view back onto live data.
+- **"Graphs stop appearing after disconnect → reconnect."** A stale
+  manual range from before a disconnect may no longer contain the fresh,
+  reset buffer's timestamps at all. `_mqtt_connect` calls
+  `plot_manager.resume_live_follow()` (and resets `btnLiveFreeze`)
+  alongside `LiveController.reset` on every fresh connect, which is the
+  actual fix — see the next two bullets for why this can't just be "call
+  `setXRange` every tick regardless," which is what the code used to do.
+- **(Fixed 2026-08-21) "A specific plot goes blank while the others keep
+  updating."** The window used to be computed *once* from the aligned
+  (ECU) reference timeline's latest timestamp and applied identically to
+  all six plots. Signals don't necessarily update at the same cadence
+  (e.g. SoH refreshing far less often than voltage) — pinning a sparser
+  signal's plot to the *reference* timeline's latest timestamp could
+  leave its own last valid sample outside that shared window even though
+  it's the most recent data that signal actually has. Fixed:
+  `PlotManager._apply_live_window` now computes each overlay plot's own
+  `t_max` from that signal's own latest valid (non-NaN twin+ECU) sample;
+  the error plot uses the latest valid sample across whichever signals
+  are ticked on it, falling back to the reference timeline if none have
+  valid data.
+- **(Fixed 2026-08-21) "It moves on its own, and 'autofocus' getting
+  back to the graph reverts back immediately."** Forcing `setXRange`
+  unconditionally on *every* tick fought any user interaction — a manual
+  drag/wheel-zoom, or clicking pyqtgraph's own "A" auto-range button,
+  both got overridden within one tick (≤ the refresh interval). Fixed:
+  `PlotManager._live_follow` (a per-plot bool, default `True`) gates the
+  pin now. A user gesture on a plot — caught via
+  `PlotItem.sigRangeChangedManually`, which pyqtgraph emits both for a
+  direct drag/zoom *and* for a click on its own "A" button — flips that
+  one plot's flag to `False` (`_on_user_range_change`); the pin is
+  skipped for that plot until `resume_live_follow()` (a fresh live
+  session) or the user explicitly re-freezes/un-freezes (§5.6) resets
+  it. Other plots keep tracking normally — only the one the user touched
+  pauses.
 
-Offline runs and Freeze/Snapshot pass `live_window_ms=None` (the
-default) — they want the full accumulated range visible, not a scrolling
-window.
+Offline runs pass `live_window_ms=None` (the default) — they want the
+full accumulated range visible, not a scrolling window.
 
 ---
 
@@ -433,7 +532,7 @@ a third load path, reuse `build_load_result`.
 
 ## 9. Testing conventions
 
-### 9.1 pytest, 237 tests, ~4s
+### 9.1 pytest, 251 tests, ~4-37s
 
 ```bash
 source ../venv/bin/activate
@@ -576,7 +675,8 @@ Unless the user explicitly asks for them.
 14. **Never commit unless the user explicitly asks.**
 15. **Run `python -m pytest tests/ -q` before declaring a task done.**
     The full suite must pass and the test count must not drop (currently
-    237; the old "202" figure was stale — the suite has grown).
+    251; the old "202"/"237"/"240"/"245" figures were stale — the suite
+    has grown).
 16. **Live-mode wire timestamps are Unix epoch MILLISECONDS.** See §6.0.
     Every consumer that compares raw timestamp deltas
     (`live_accumulator.DEFAULT_MAX_AGE_MS`,
@@ -611,6 +711,61 @@ Unless the user explicitly asks for them.
   the CSV uses — cosmetic warning text only (not fatal), but a future
   refactor could thread an explicit unit through `align()` if it becomes
   a real pain point.
+- **(Fixed 2026-08-19) `back.py._run_live_event_detection` was feeding
+  live-mode's millisecond-scale aligned timestamps into
+  `EventDetector.update`'s `now` parameter**, which is compared against
+  `event_detector.DetectorConfig`'s *seconds*-scale
+  `expected_update_interval_s` / `timeout_tolerance_s` — every live tick
+  read as thousands of times slower than expected, so `EVENT_TIMEOUT`
+  fired on almost every tick and flooded the Events tab. Fixed to pass
+  real wall-clock `time.time()` instead (one read per tick, not per
+  row), matching what the Timeout check is actually meant to measure —
+  see the docstring on `_run_live_event_detection`. The offline path
+  (`_run_event_detection`) is unaffected — it deliberately drives `now`
+  from the sample's own timestamp for batch-replay cadence, and CSV
+  timestamps stay in the file's own (roughly-seconds) unit.
+- **(Fixed 2026-08-19) Disconnect then reconnect the live MQTT stream
+  used to leave the graphs frozen forever.** `back.py._mqtt_connect`
+  creates a brand-new `MqttWorker` on each connect, but the *old*
+  worker's `disconnected` (and `error_occurred`) signal, emitted async
+  from paho's own network thread during teardown, could still be
+  connected to `_on_mqtt_disconnected` by the time it was actually
+  delivered — which was after the user had already reconnected (new
+  worker live, button re-checked, live controller re-armed). That stale
+  signal called `btnLiveConnect.setChecked(False)`, which re-entered
+  `_mqtt_disconnect()` and stopped the *new* session's re-align timer
+  moments after it started. Fixed by disconnecting the old worker's
+  signals in `_teardown_mqtt_thread()` before discarding it, so any
+  already-queued emission from it becomes a no-op on delivery (Qt's
+  `disconnect()` is safe against in-flight queued signals — delivery is
+  gated on the connection still existing at dispatch time). See
+  `tests/test_back.py::test_reconnect_survives_stale_disconnect_signal`.
+- **(Fixed 2026-08-19) `tests/test_back.py::test_apply_rerun_uses_edited_tolerance`
+  was intermittently flaky in the full suite** (passed reliably alone,
+  failed roughly 2 of every 3 full-suite runs once a similarly-shaped
+  test was added ahead of it). Cause: its `_pump(qapp, lambda:
+  window.stats_result is not None)` predicate was already satisfied by
+  the *pre-rerun* `stats_result` (set by the `on_start_comparison` call
+  earlier in the same test), so on a slow tick it could stop pumping
+  before the cross-thread `Apply & Re-run` had actually finished and
+  read the stale value. Fixed by pumping for the specific edited
+  tolerance value instead of mere non-`None`-ness. If you add another
+  Apply & Re-run test, pump for the value you actually changed, not
+  just "a result exists" — `stats_result` is essentially always already
+  non-`None` by that point in these tests.
+- **`EventDetector`'s Communication-Loss check (task 6) is effectively
+  dead code on the live/offline glue path.** `back.py._aligned_row_to_dicts`
+  gives both the "real" and "twin" dicts the *aligned* (ECU) timeline
+  timestamp — alignment collapses the twin onto the ECU's timeline, so
+  each source's own original timestamp isn't available at that point —
+  and the shared aligned timestamp always advances every row, so it can
+  never read as "stalled" for either source. A stalled twin publisher is
+  still caught, just as a "Missing Signal" alert (its dict ends up with
+  no signal keys once alignment leaves it NaN) rather than the spec's
+  "Communication Loss" event name. A real fix needs `AlignedData` /
+  `AlignedSignal` to carry each source's original per-row timestamp
+  through alignment — noted here rather than attempted as a drive-by
+  change; see `back.py._aligned_row_to_dicts`'s docstring.
 
 ---
 
