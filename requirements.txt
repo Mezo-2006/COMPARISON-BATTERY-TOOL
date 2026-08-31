@@ -1,6 +1,9 @@
+certifi==2026.7.22
 charset-normalizer==3.4.9
 colorama==0.4.6
 et_xmlfile==2.0.0
+idna==3.19
+Markdown==3.10.3
 numpy==2.2.6
 openpyxl==3.1.5
 paho-mqtt==2.1.0
@@ -15,5 +18,7 @@ pytest-qt==4.5.0
 python-dateutil==2.9.0.post0
 pytz==2026.2
 reportlab==5.0.0
+requests==2.34.2
 six==1.17.0
 tzdata==2026.3
+urllib3==2.7.0
